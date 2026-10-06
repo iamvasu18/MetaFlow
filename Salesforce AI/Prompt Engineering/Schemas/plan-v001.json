@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Salesforce AI Implementation Plan",
+  "type": "object",
+  "required": [
+    "id",
+    "requirementId",
+    "summary",
+    "assumptions",
+    "items",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "requirementId": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/planItem"
+      }
+    },
+    "storyPoints": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "READY_FOR_REVIEW",
+        "APPROVED",
+        "REJECTED"
+      ]
+    }
+  },
+  "$defs": {
+    "planItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "action",
+        "metadataType",
+        "fullName",
+        "dependencies"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "CREATE",
+            "UPDATE",
+            "DELETE",
+            "NO_CHANGE"
+          ]
+        },
+        "metadataType": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {},
+        "target": {},
+        "config": {},
+        "validation": {
+          "type": "object"
+        },
+        "approval": {
+          "type": "string",
+          "enum": [
+            "PENDING",
+            "APPROVED",
+            "SKIPPED",
+            "REJECTED"
+          ]
+        },
+        "deployment": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

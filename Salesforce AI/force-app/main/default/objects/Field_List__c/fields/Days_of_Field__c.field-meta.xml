@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Days_of_Field__c</fullName>
+    <formula><![CDATA[IF(ISBLANK(Date_of_Field__c), 0, TODAY() - Date_of_Field__c)]]></formula>
+    <formulaTreatBlanksAs>BlankAsZero</formulaTreatBlanksAs>
+    <label>Days of Field</label>
+    <precision>10</precision>
+    <scale>0</scale>
+    <type>Number</type>
+</CustomField>

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CustomField xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Developer__c</fullName>
+    <label>Developer</label>
+    <referenceTo>Account</referenceTo>
+    <relationshipName>Field_List_Developers</relationshipName>
+    <required>false</required>
+    <type>Lookup</type>
+</CustomField>

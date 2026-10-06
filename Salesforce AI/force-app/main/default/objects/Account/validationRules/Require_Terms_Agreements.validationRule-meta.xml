@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Require_Terms_Agreements</fullName>
+    <active>true</active>
+    <description>Prevents saving a record when the Terms &amp; Agreements checkbox is unchecked.</description>
+    <errorConditionFormula><![CDATA[NOT(Terms_Agreements__c)]]></errorConditionFormula>
+    <errorDisplayField>Terms_Agreements__c</errorDisplayField>
+    <errorMessage>Please accept the Terms &amp; Agreements before saving.</errorMessage>
+</ValidationRule>
