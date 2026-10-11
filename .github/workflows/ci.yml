@@ -30,7 +30,7 @@ jobs:
     env:
       PYTHON_DOTENV_DISABLED: "1"
       APP_DATABASE_URL: ""
-      APP_DATABASE: ${{ runner.temp }}/metaflow-ci/accounts.sqlite3
+      APP_DATABASE: /tmp/metaflow-ci/accounts.sqlite3
       APP_REDIS_URL: ""
       APP_JOB_MODE: embedded
       APP_BACKGROUND_JOBS: "false"
