@@ -28,6 +28,7 @@ export default function Workspace() {
   const [bundle, setBundle] = useState(null);
   const [queuedGeneration, setQueuedGeneration] = useState(null);
   const [jobProgress, setJobProgress] = useState(null);
+  const token = '';
   const [approvedHash, setApprovedHash] = useState('');
   const [repairTicket, setRepairTicket] = useState('');
   const [clarification, setClarification] = useState(null);
