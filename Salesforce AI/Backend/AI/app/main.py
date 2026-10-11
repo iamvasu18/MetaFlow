@@ -1,5 +1,10 @@
+from Backend.AI.app.services.planning_clarification import planning_error_detail
+from Backend.AI.app.account_api import router as account_router, account_guard, target_org
+from Backend.AI.app.services.layout_selection_service import LayoutSelectionWorkflow
 from Backend.AI.app.services.page_layout_service import PageLayoutService
 import json
+import logging
+import time
 from Backend.AI.app.services.profile_fls_service import (
     SystemAdministratorFLSService,
     initialize_deployment_project,
@@ -11,7 +16,7 @@ import shutil
 import subprocess
 import tempfile
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from Backend.AI.app.providers.provider_factory import (
@@ -44,6 +49,7 @@ from Backend.AI.app.services.metadata_generator import (
 
 from Backend.AI.app.services.metadata_service import (
     MetadataService,
+    load_metadata_generation_context,
 )
 
 from Backend.AI.app.services.change_service import (
@@ -74,6 +80,8 @@ from Backend.AI.app.salesforce.metadata_service import (
 app = FastAPI(
     title="Salesforce AI Service"
 )
+app.include_router(account_router)
+app.middleware("http")(account_guard)
 
 
 # ==================================================
@@ -81,6 +89,17 @@ app = FastAPI(
 # ==================================================
 
 plan_store = PlanStore()
+layout_workflow = LayoutSelectionWorkflow(plan_store, project_root=Path.cwd(), target_org="request-scoped")
+app.include_router(layout_workflow.router)
+
+# Independent LWC service; existing Flow and metadata endpoints are preserved.
+from Backend.AI.app.api.lwc_api import LWCWorkflow
+lwc_workflow = LWCWorkflow(project_root=Path.cwd())
+app.include_router(lwc_workflow.router)
+
+from Backend.AI.app.api.apex_api import ApexWorkflow
+apex_workflow = ApexWorkflow(project_root=Path.cwd())
+app.include_router(apex_workflow.router)
 
 metadata_spec_store = (
     MetadataSpecStore()
@@ -96,10 +115,17 @@ change_spec_store = (
 # ==================================================
 
 class PlanRequest(BaseModel):
+    job_key: str | None = Field(default=None,pattern=r'^[A-Za-z0-9_-]{16,64}$')
+    conversation_id: str | None = Field(default=None,max_length=100)
+    repair_ticket: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+    repair_error: str | None = Field(default=None,max_length=12000)
+    generate_files: bool = False
+    target_org: str = Field(..., pattern=r"^[A-Za-z0-9][A-Za-z0-9_.@+\-]{0,199}$")
 
     requirement: str = Field(
         ...,
         min_length=1,
+        max_length=40000,
         description=(
             "Salesforce requirement provided by the user"
         ),
@@ -112,6 +138,10 @@ class PlanRequest(BaseModel):
             "If omitted, metadata is discovered automatically."
         ),
     )
+
+
+class DefaultApprovalRequest(BaseModel):
+    source_hash: str = Field(min_length=64,max_length=64)
 
 
 # ==================================================
@@ -417,10 +447,72 @@ def health():
 # Generate Implementation Plan
 # ==================================================
 
+@app.get("/api/flows/capabilities")
+def get_flow_capabilities():
+    from Backend.AI.app.validators.flow_validator import ExtendedFlowConfig
+    schema = ExtendedFlowConfig.model_json_schema()
+    fields = schema["$defs"]["ScreenField"]["properties"]
+    return {
+        "contractVersion": 2,
+        "deploymentStatus": "Draft",
+        "flowTypes": schema["properties"]["flowType"]["enum"],
+        "elements": sorted(schema["properties"]["elements"]["items"]["discriminator"]["mapping"]),
+        "screenControls": fields["fieldType"]["enum"],
+        "screenInputTypes": fields["dataType"]["anyOf"][0]["enum"],
+        "schemaEndpoint": "/api/flows/config-schema",
+        "targetOrgValidationRequired": True,
+        "activationImplemented": False,
+        "unsupported": ["Flow Orchestration", "Specialized industry process types", "Wait elements",
+                        "Transform", "Collection processors", "Apex-defined resource types",
+                        "Nested loops", "Custom LWC generation", "Automatic Flow launch placement"],
+    }
+
+
+@app.get("/api/flows/config-schema")
+def get_flow_config_schema():
+    from Backend.AI.app.validators.flow_validator import flow_config_json_schema
+    return {"$schema": "https://json-schema.org/draft/2020-12/schema", **flow_config_json_schema()}
+
+
 @app.post("/api/plan")
 def generate_plan(
     request: PlanRequest,
+    http_request: Request = None,
 ):
+    if request.generate_files:
+        if request.target_org != target_org():
+            raise HTTPException(403, 'The requested org does not match your authenticated workspace org.')
+        from Backend.AI.app.services.background_jobs import enabled, enqueue
+        if enabled():
+            from fastapi.responses import JSONResponse
+            payload={'request':request.model_dump(exclude={'job_key','conversation_id','salesforce_context'}),'conversation_id':request.conversation_id}
+            return JSONResponse(enqueue('generate',payload,key=request.job_key),status_code=202)
+        try:
+            provider=get_ai_provider()
+            if request.repair_ticket:
+                from Backend.AI.app.account_api import current_account
+                from Backend.AI.app.account_api import db
+                from Backend.AI.app.services.plan_revision_service import RepairProvider
+                with db() as c:
+                    row=c.execute('SELECT payload FROM repair_tickets WHERE id=? AND user_id=? AND org_id=?',
+                        (request.repair_ticket,current_account.get(),target_org())).fetchone()
+                failure=json.loads(row['payload']) if row else None
+                if not failure:
+                    raise HTTPException(409, 'The saved rejected draft expired or is unavailable. Generate the requirement again to capture its current failure.')
+                if failure['originalRequirement'] != request.requirement:
+                    raise HTTPException(409, 'The requirement changed. Generate a new draft rather than repair the previous one.')
+                provider = RepairProvider(provider, failure)
+            elif request.repair_error:
+                from Backend.AI.app.services.plan_revision_service import RepairProvider
+                raise HTTPException(409,'No saved candidate is available for targeted repair. Generate the requirement once to capture the failing component.')
+            return build_default_draft(request.requirement,request.target_org,provider,http_request)
+        except HTTPException:raise
+        except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
+        except RuntimeError as exc:raise HTTPException(502,str(exc)) from exc
+    require_legacy_workflow()
+    if request.target_org != target_org():
+        raise HTTPException(422,'The selected org does not match the connected org.')
+
 
     try:
 
@@ -430,7 +522,7 @@ def generate_plan(
 
         salesforce_metadata_service = (
             SalesforceMetadataService(
-                target_org="AIOrg"
+                target_org=target_org()
             )
         )
 
@@ -488,6 +580,10 @@ def generate_plan(
 
     except Exception as exc:
 
+        logging.getLogger(__name__).exception(
+            "Failed to generate Salesforce implementation plan"
+        )
+
         raise HTTPException(
             status_code=500,
             detail=(
@@ -519,6 +615,9 @@ def get_plan(
             ),
         )
 
+    if metadata_spec_store.get_package(plan_id):
+        return default_package_response(plan_id)
+
     return plan.model_dump(
         by_alias=True
     )
@@ -529,8 +628,10 @@ def get_plan(
 # ==================================================
 
 @app.post("/api/plans/{plan_id}/approve")
+@layout_workflow.locked
 def approve_plan(
     plan_id: str,
+    request: DefaultApprovalRequest | None = None,
 ):
 
     try:
@@ -626,6 +727,20 @@ def approve_plan(
         # APPROVE ITEMS
         # =================================================
 
+        layout_workflow.require(plan)
+
+        package=metadata_spec_store.get_package(plan_id)
+        if not package:
+            require_legacy_workflow()
+        if package:
+            layout_workflow.options(plan_id)
+            default_pipeline.verify_package(package)
+            default_pipeline.assert_plan(package,plan)
+            if not package.get('layoutReady') or package['layoutSelections']!=layout_workflow.require(plan):
+                raise HTTPException(409,'Generate the reviewed files after completing layout selections.')
+            if request is None or request.source_hash!=package['sourceHash']:
+                raise HTTPException(422,'Approval must identify the exact reviewed source hash.')
+
         for item in plan.items:
 
             if item.action == "NO_CHANGE":
@@ -646,6 +761,11 @@ def approve_plan(
                 status="APPROVED",
             )
         )
+
+        if package:
+            package['approvedHash']=package['sourceHash']
+            metadata_spec_store.save_package(package)
+            return default_package_response(plan_id)
 
         return plan.model_dump(
             by_alias=True
@@ -713,9 +833,12 @@ def reject_plan(
             )
         )
 
-        metadata_spec_store.delete(
-            plan_id
-        )
+        rejected_package=metadata_spec_store.get_package(plan_id)
+        if rejected_package:
+            rejected_package.update(state='rejected',approvedHash=None,validatedHash=None)
+            metadata_spec_store.save_package(rejected_package)
+        else:
+            metadata_spec_store.delete(plan_id)
 
         change_spec_store.delete(
             plan_id
@@ -743,9 +866,22 @@ def reject_plan(
 @app.post(
     "/api/plans/{plan_id}/generate-metadata"
 )
+@layout_workflow.locked
 def generate_metadata(
     plan_id: str,
 ):
+
+    package=metadata_spec_store.get_package(plan_id)
+    if package:
+        plan=plan_store.get(plan_id)
+        try:
+            if plan.status=='DRAFT':
+                package=default_pipeline.prepare_review(package,plan,layout_workflow.require(plan))
+                metadata_spec_store.save_package(package)
+            return default_package_response(plan_id)
+        except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
+
+    require_legacy_workflow()
 
     try:
 
@@ -809,9 +945,9 @@ def generate_metadata(
             ai_metadata_service
             .generate_specification(
                 plan=plan,
-                salesforce_context={
-                    "objects": []
-                },
+                salesforce_context=load_metadata_generation_context(
+                    plan, SalesforceMetadataService(target_org=target_org())
+                ),
             )
         )
 
@@ -890,6 +1026,12 @@ def generate_metadata(
         ) from exc
 
 
+def require_legacy_workflow():
+    import os
+    if os.getenv('APP_ENABLE_LEGACY_WORKFLOW', '').lower() != 'true':
+        raise HTTPException(409, 'Legacy workflow execution is disabled. Use unified workspace source review, validation and deployment.')
+
+
 # ==================================================
 # Generate UPDATE Change Specification
 # ==================================================
@@ -897,9 +1039,12 @@ def generate_metadata(
 @app.post(
     "/api/plans/{plan_id}/generate-change"
 )
+@layout_workflow.locked
 def generate_change(
     plan_id: str,
 ):
+
+    require_legacy_workflow()
 
     try:
 
@@ -1003,7 +1148,7 @@ def generate_change(
 
         salesforce_metadata_service = (
             SalesforceMetadataService(
-                target_org="AIOrg"
+                target_org=target_org()
             )
         )
 
@@ -1085,7 +1230,7 @@ def generate_change(
         return {
             "planId": plan.id,
             "status": plan.status,
-            "targetOrg": "AIOrg",
+            "targetOrg": target_org(),
             "changeSpecification": (
                 specification.model_dump()
             ),
@@ -1129,6 +1274,7 @@ def generate_change(
 @app.post(
     "/api/plans/{plan_id}/deploy-change"
 )
+@layout_workflow.locked
 def deploy_change(
     plan_id: str,
 ):
@@ -1140,12 +1286,14 @@ def deploy_change(
 
     - Reuses the exact saved ChangeSpecification.
     - Does NOT call Claude or any AI provider.
-    - Retrieves fresh metadata from AIOrg.
+    - Retrieves fresh metadata from the connected org.
     - Applies the saved change to a temporary copy.
     - Runs a Salesforce dry-run first.
     - Performs the real deployment only after dry-run succeeds.
     - Deletes the temporary staging directory automatically.
     """
+
+    require_legacy_workflow()
 
     try:
 
@@ -1351,7 +1499,7 @@ def deploy_change(
             retrieve_command.extend(
                 [
                     "--target-org",
-                    "AIOrg",
+                    target_org(),
                     "--output-dir",
                     str(
                         staging_root
@@ -1470,7 +1618,7 @@ def deploy_change(
             dry_run_command.extend(
                 [
                     "--target-org",
-                    "AIOrg",
+                    target_org(),
                     "--wait",
                     "10",
                     "--json",
@@ -1515,7 +1663,7 @@ def deploy_change(
             deploy_command.extend(
                 [
                     "--target-org",
-                    "AIOrg",
+                    target_org(),
                     "--wait",
                     "10",
                     "--json",
@@ -1535,7 +1683,7 @@ def deploy_change(
                 ),
                 "planId": plan.id,
                 "status": plan.status,
-                "targetOrg": "AIOrg",
+                "targetOrg": target_org(),
                 "changeSpecification": (
                     specification.model_dump()
                 ),
@@ -1595,9 +1743,12 @@ def deploy_change(
 @app.post(
     "/api/plans/{plan_id}/execute"
 )
+@layout_workflow.locked
 def execute_plan(
     plan_id: str,
 ):
+
+    require_legacy_workflow()
 
     try:
 
@@ -1616,7 +1767,7 @@ def execute_plan(
 
         execution_service = (
             SalesforceExecutionService(
-                target_org="AIOrg"
+                target_org=target_org()
             )
         )
 
@@ -1653,7 +1804,15 @@ def execute_plan(
 @app.post(
     "/api/plans/{plan_id}/deploy"
 )
-def deploy_plan(plan_id: str):
+@layout_workflow.locked
+def deploy_plan(plan_id: str, request: DefaultApprovalRequest | None = None):
+    package=getattr(metadata_spec_store,'get_package',lambda _:None)(plan_id)
+    if package:
+        if request is None or request.source_hash != package['sourceHash']:
+            raise HTTPException(409,'The displayed files changed. Reload and approve the current version before deploying.')
+        return run_default_package(plan_id,dry_run=False)
+    require_legacy_workflow()
+
     try:
         plan = plan_store.get(plan_id)
         if plan is None:
@@ -1671,6 +1830,9 @@ def deploy_plan(plan_id: str):
         if specification.validationIssues:
             raise HTTPException(status_code=422, detail={"message": "Stored metadata specification contains validation issues.", "validationIssues": [i.model_dump() for i in specification.validationIssues]})
         validate_create_specification(plan, specification)
+        layout_selections = layout_workflow.require(plan)
+        from Backend.AI.app.services.flow_preflight_service import FlowPreflightService
+        flow_preflight = FlowPreflightService(target_org=target_org()).validate(plan)
 
         # Isolate this request. Existing local profile XML is never overwritten
         # or copied into the deployment, and previous plans cannot leak into it.
@@ -1688,7 +1850,7 @@ def deploy_plan(plan_id: str):
 
             # Use actual generated field XML for Formula/required/type rules.
             fls = SystemAdministratorFLSService(project_root=staging).generate(specification)
-            layouts = PageLayoutService(project_root=staging, target_org="AIOrg").generate(specification)
+            layouts = PageLayoutService(project_root=staging, target_org=target_org()).generate(specification, selections=layout_selections)
             deployment_files = list(dict.fromkeys(
                 Path(path).as_posix()
                 for path in generated_files + fls["generatedFiles"] + layouts["generatedFiles"]
@@ -1698,7 +1860,10 @@ def deploy_plan(plan_id: str):
             validation_result["validatedFiles"] = deployment_files
             validation_result["systemAdministratorFLS"] = fls
             validation_result["pageLayouts"] = layouts
-            result = SalesforceDeploymentExecutor(target_org="AIOrg", project_root=staging).deploy(
+            flow_preflight["salesforceValidation"] = FlowPreflightService(target_org=target_org()).validate_generated(
+                plan, validation_result, staging,
+            )
+            result = SalesforceDeploymentExecutor(target_org=target_org(), project_root=staging).deploy(
                 plan=plan, validation_result=validation_result,
             )
             if not result.get("success", False):
@@ -1710,6 +1875,7 @@ def deploy_plan(plan_id: str):
                 "generatedFiles": deployment_files,
                 "systemAdministratorFLS": fls,
                 "pageLayouts": layouts,
+                "flowPreflight": flow_preflight,
                 "validation": validation_result,
                 "deployment": result,
             }
@@ -1721,3 +1887,523 @@ def deploy_plan(plan_id: str):
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+
+# Apex/LWC are internal generators of the existing default plan workflow.
+from Backend.AI.app.services.metadata_service import DefaultMetadataPipeline
+default_pipeline=DefaultMetadataPipeline(project_root=Path.cwd())
+
+
+def default_package_response(plan_id):
+    package=metadata_spec_store.get_package(plan_id)
+    if package is None:raise HTTPException(404,'Generated package not found.')
+    package['id']=plan_id
+    package['plan']=plan_store.get(plan_id).model_dump()
+    package['layoutOptions']=layout_workflow.options(plan_id)
+    return package
+
+
+def save_default_result(plan_id,package,payload,operation):
+    details=payload.get('result',{})
+    if not isinstance(details,dict):raise RuntimeError('Invalid Salesforce deployment response.')
+    pending=details.get('done') is False or details.get('status') in {'Pending','Queued','InProgress','Canceling'}
+    if pending:state='pending'
+    elif details.get('done') is True and details.get('success') is True:
+        state='validated' if operation=='validate' else 'deployed'
+    elif details.get('done') is True and details.get('success') is False:state='failed'
+    else:state='unknown'
+    # A successful check-only job simulates component creation; its IDs and
+    # componentSuccesses are not evidence that metadata was committed.
+    if state == 'deployed' and details.get('checkOnly') is not False:
+        state = 'unknown'
+        package.update(
+            error='Salesforce returned a validation-only result or did not confirm checkOnly=false. Deployment is not confirmed.',
+            nextAction='Inspect Salesforce Deployment Status and the saved job ID. Do not repeat deployment until the submitted job is identified.',
+        )
+    elif state == 'validated' and details.get('checkOnly') is False:
+        state = 'unknown'
+        package.update(
+            error='Salesforce returned a real deployment result for a validation operation. Inspect Deployment Status.',
+            nextAction='Review the saved Salesforce job before continuing.',
+        )
+    # Invalidate whenever Salesforce confirms a real deployment, even when a
+    # subsequent application-level test/coverage check rejects its report.
+    if details.get('done') is True and details.get('success') is True and details.get('checkOnly') is False:
+        from Backend.AI.app.account_api import current_account
+        from Backend.AI.app.services.planning_performance import invalidate_org_context
+        invalidate_org_context(current_account.get(), package['targetOrg'])
+    try:
+        default_pipeline.check_tests(package,payload)
+    except ValueError as exc:
+        package.update(lastResult=payload,operation=operation,jobId=details.get('id'),
+            state='failed' if details.get('done') is True and details.get('success') is False else ('failed' if operation=='validate' else 'unknown'),error=str(exc),validatedHash=None)
+        metadata_spec_store.save_package(package)
+        return default_package_response(plan_id)
+    if operation == 'validate':
+        package['validatedHash'] = package['sourceHash'] if state == 'validated' else None
+    package.update(lastResult=payload,operation=operation,jobId=details.get('id'),state=state)
+    if state in {'validated','deployed','failed'} and package.get('operationStartedAt'):
+        import time
+        elapsed=time.time()-package['operationStartedAt']
+        package['operationSeconds']=round(elapsed,3)
+        logging.getLogger(__name__).warning('Salesforce operation=%s state=%s total_seconds=%.3f job=%s',operation,state,elapsed,details.get('id'))
+    metadata_spec_store.save_package(package)
+    return default_package_response(plan_id)
+
+
+@layout_workflow.locked
+def run_default_package(plan_id,dry_run):
+    package=metadata_spec_store.get_package(plan_id)
+    if package is None:raise HTTPException(404,'Generated package not found.')
+    if package['targetOrg'] != target_org():raise HTTPException(403,'This package belongs to a different org.')
+    plan=plan_store.get(plan_id)
+    if plan.status!='APPROVED' or any(i.approval!='APPROVED' for i in plan.items if i.action!='NO_CHANGE'):
+        raise HTTPException(422,'Approve every deployable plan item first.')
+    if package['state'] in {'queued','running','pending','unknown','deployed'}:
+        raise HTTPException(409,'Inspect the saved operation before retrying.')
+    if not dry_run and (package['state'] != 'validated' or package.get('validatedHash') != package['sourceHash']):
+        raise HTTPException(409,'Run Salesforce validation on the approved files before deployment.')
+    try:
+        default_pipeline.verify_package(package)
+        default_pipeline.assert_plan(package,plan)
+        if package['layoutSelections']!=layout_workflow.require(plan):raise ValueError('Reviewed layout selections changed.')
+    except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
+    operation='validate' if dry_run else 'deploy'
+    import time
+    from Backend.AI.app.services.background_jobs import enabled, enqueue
+    if enabled():
+        enqueue(operation,{'plan_id':plan_id,'source_hash':package['sourceHash']},package=package)
+        return default_package_response(plan_id)
+    package.update(state='running',operation=operation,error=None,errorDetails=None,nextAction=None,jobId=None,operationStartedAt=time.time())
+    if dry_run:
+        package['validatedHash']=None
+    metadata_spec_store.save_package(package)
+    try:
+        payload=default_pipeline.deploy(package,dry_run=dry_run)
+        return save_default_result(plan_id,package,payload,operation)
+    except ValueError as exc:
+        package.update(state='unknown' if operation=='deploy' else 'failed',operation=operation,error=str(exc))
+        metadata_spec_store.save_package(package)
+        raise HTTPException(422,planning_error_detail(exc)) from exc
+    except Exception as exc:
+        logging.getLogger(__name__).exception('Salesforce %s failed for plan %s',operation,plan_id)
+        # Preserve the CLI's diagnostic rather than replacing every failure
+        # with the same outcome warning. Redact common credential forms.
+        import re
+        diagnostic=re.sub(r'(?i)(Bearer\s+)[^\s]+',r'\1[redacted]',str(exc))
+        diagnostic=re.sub(r'(?i)((?:access_token|refresh_token|password|client_secret)\s*[=:]\s*)[^\s,;]+',r'\1[redacted]',diagnostic)
+        package.update(state='unknown',operation=operation,
+            error='Salesforce did not confirm the '+operation+' result. '+diagnostic[:1500],
+            errorDetails={'type':type(exc).__name__,'message':diagnostic[:1500]},
+            nextAction='Check the saved job status before retrying. If no job ID was returned, review Salesforce Deployment Status and the backend log.')
+        metadata_spec_store.save_package(package)
+        raise HTTPException(502,package['error']) from exc
+
+
+@app.post('/api/plans/{plan_id}/validate')
+@layout_workflow.locked
+def validate_default_package(plan_id:str):
+    return run_default_package(plan_id,dry_run=True)
+
+
+@app.post('/api/plans/{plan_id}/report')
+@layout_workflow.locked
+def report_default_package(plan_id:str):
+    package=metadata_spec_store.get_package(plan_id)
+    if not package or not package.get('jobId'):
+        raise HTTPException(409,'No saved Salesforce job ID. Inspect Salesforce Deployment Status.')
+    if package['state'] not in {'pending','unknown'}:
+        return default_package_response(plan_id)
+    try:
+        return save_default_result(plan_id,package,default_pipeline.report(package),package['operation'])
+    except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
+
+
+class RevisionRequest(BaseModel):
+    requirement:str=Field(min_length=1,max_length=20000)
+
+
+class FlowActivationRequest(BaseModel):
+    component_name:str=Field(min_length=1,max_length=80)
+    source_hash:str=Field(min_length=64,max_length=64)
+
+
+@app.post('/api/plans/{plan_id}/activate-flow')
+@layout_workflow.locked
+def activate_default_flow(plan_id:str,request:FlowActivationRequest):
+    from Backend.AI.app.account_api import current_account,current_org,record_activity
+    from Backend.AI.app.services.flow_activation_service import FlowActivationService
+    package=metadata_spec_store.get_package(plan_id)
+    if not package:raise HTTPException(404,'Deployed package not found.')
+    if package.get('targetOrg')!=current_org.get():raise HTTPException(403,'Select the saved target org.')
+    if request.source_hash!=package.get('sourceHash') or package.get('approvedHash')!=package.get('sourceHash'):raise HTTPException(409,'The approved source does not match this request.')
+    previously_active=package.get('flowActivations',{}).get(request.component_name,{}).get('state')=='active'
+    try:
+        default_pipeline.verify_package(package)
+        FlowActivationService(current_account.get(),package['targetOrg'],package['apiVersion']).activate(package,request.component_name,metadata_spec_store.save_package)
+    except ValueError as error:raise HTTPException(422,str(error)) from error
+    state=package.get('flowActivations',{}).get(request.component_name,{})
+    if state.get('state') in {'active','unknown'}:
+        from Backend.AI.app.services.planning_performance import invalidate_org_context
+        invalidate_org_context(current_account.get(),package['targetOrg'])
+        if state.get('state')=='active' and not previously_active:
+            record_activity(current_account.get(),package['targetOrg'],plan_id,'flow_activated','Flow activation confirmed',request.component_name)
+    return default_package_response(plan_id)
+
+
+class RepairRequest(BaseModel):
+    component_name:str=Field(default='',max_length=200)
+    instruction:str=Field(default='',max_length=12000)
+    source_hash:str | None=Field(default=None,min_length=64,max_length=64)
+
+
+class SourceEditRequest(BaseModel):
+    component_name:str=Field(min_length=1,max_length=200)
+    source_hash:str=Field(min_length=64,max_length=64)
+    files:dict[str,str]
+
+
+def build_default_draft(requirement,org,provider,http_request=None,activity_title=None,repair_package=None):
+    from time import perf_counter
+    draft_started=perf_counter()
+    from Backend.AI.app.services.metadata_service import DefaultGenerationRequest
+    from Backend.AI.app.validators.plan_validator import ImplementationPlan
+    from Backend.AI.app.account_api import user,db,save_chat,record_activity
+    package=default_pipeline.generate(DefaultGenerationRequest(requirement=requirement,target_org=org),provider)
+    if repair_package:
+        old=repair_package
+        package['plan']['id']=old['plan']['id']
+        if package.get('metadataSpecification'):
+            package['metadataSpecification']['planId']=old['plan']['id']
+        changed=getattr(provider,'changed_ids',set())
+        original_items={i['id']:i for i in old['plan']['items']}
+        if {i['id'] for i in package['plan']['items']} != set(original_items):
+            raise ValueError('Repair changed the original plan component set.')
+        for item in package['plan']['items']:
+            before=original_items[item['id']]
+            for key in set(item)|set(before):
+                if key not in {'config','approval'} and item.get(key)!=before.get(key):
+                    raise ValueError('Repair changed original plan intent: '+key)
+            if item['id'] not in changed:item['config']=before['config']
+        # Only the failed admin component files may change; retain unrelated generated source exactly.
+        names=[original_items[i]['fullName'] for i in changed]
+        def repair_path(path):
+            return any('/flows/'+n+'.flow-meta.xml' in path or
+                ('/objects/'+n.split('.')[0]+'/validationRules/'+n.split('.')[-1]+'.validationRule-meta.xml') in path
+                for n in names)
+        from copy import deepcopy
+        for key in ('baseFiles','files'):
+            repaired_files={path:source for path,source in package[key].items() if repair_path(path)}
+            package[key]=deepcopy(old[key])
+            package[key].update(repaired_files)
+        if old.get('metadataSpecification'):
+            updated_by_id={i['itemId']:i for i in package['metadataSpecification']['metadata']}
+            package['metadataSpecification']=deepcopy(old['metadataSpecification'])
+            for item in package['metadataSpecification']['metadata']:
+                if item['itemId'] in changed:item['config']=updated_by_id[item['itemId']]['config']
+        package['components']=deepcopy(old['components'])
+        package['testClasses']=deepcopy(old['testClasses'])
+        package['sourceHash']=default_pipeline.fingerprint(package)
+    plan=ImplementationPlan.model_validate(package['plan'])
+    package['evaluationOriginPlanId']=plan.id
+    plan_store.save(plan)
+    metadata_spec_store.delete(plan.id);change_spec_store.delete(plan.id)
+    metadata_spec_store.save_package(package)
+    if repair_package:
+        from Backend.AI.app.services.layout_selection_service import plan_fingerprint
+        old_layout=layout_workflow._states.get(plan.id)
+        if old_layout:
+            old_layout['planFingerprint']=plan_fingerprint(plan)
+        # Component-only repairs do not change field placement; reuse reviewed layout source.
+        package['layoutSelections']=repair_package['layoutSelections']
+        package['layoutReady']=repair_package['layoutReady']
+        package['systemAdministratorFLS']=repair_package.get('systemAdministratorFLS',{})
+        package['pageLayouts']=repair_package.get('pageLayouts',{})
+        package['sourceHash']=default_pipeline.fingerprint(package)
+        metadata_spec_store.save_package(package)
+        options={'ready':False}
+    else:
+        options=layout_workflow.options(plan.id)
+    if options['ready']:
+        package=default_pipeline.prepare_review(package,plan,layout_workflow.require(plan))
+        metadata_spec_store.save_package(package)
+    if http_request:
+        owner=user(http_request)
+        with db() as c:c.execute('INSERT OR REPLACE INTO plans VALUES(?,?,?)',(plan.id,owner['id'],org))
+        save_chat(owner['id'],org,plan.id,requirement)
+        if activity_title:record_activity(owner['id'],org,plan.id,'generated',activity_title,requirement,'generated')
+    response=default_package_response(plan.id)
+    # Include layout/FLS preparation and persistence in user-visible plan latency.
+    from Backend.AI.app.services.evaluation_service import record_event
+    generation_id=package.get('performance',{}).get('generationId')
+    if generation_id:
+        try:
+            record_event('draft_ready', {'generationId':generation_id,
+                'totalSeconds':round(perf_counter()-draft_started,3)}, plan.id, generation_id)
+        except Exception:
+            logging.getLogger(__name__).exception('Draft readiness metrics could not be recorded')
+    return response
+
+
+def revision_package(plan_id):
+    package=metadata_spec_store.get_package(plan_id)
+    if not package:raise HTTPException(404,'Saved package is unavailable. Load its requirement from chat history and generate it again.')
+    if package['targetOrg']!=target_org():raise HTTPException(403,'This package belongs to a different org.')
+    if package.get('state') in ('queued','running','pending','unknown','deployed','rejected'):
+        raise HTTPException(409,'Check the saved Salesforce operation before changing this plan.')
+    return package
+
+
+@app.post('/api/plans/{plan_id}/revise')
+@layout_workflow.locked
+def revise_default_plan(plan_id:str,request:RevisionRequest,http_request:Request):
+    package=revision_package(plan_id)
+    try:return build_default_draft(request.requirement,package['targetOrg'],get_ai_provider(),http_request,'Plan revised — approval required')
+    except HTTPException:raise
+    except ValueError as error:raise HTTPException(422,planning_error_detail(error)) from error
+    except RuntimeError as error:raise HTTPException(502,str(error)) from error
+
+
+from Backend.AI.app.services.evaluation_service import plan_measurement
+
+
+@app.post('/api/plans/{plan_id}/repair')
+@layout_workflow.locked
+@plan_measurement
+def repair_default_plan(plan_id:str,request:RepairRequest,http_request:Request):
+    from Backend.AI.app.services.plan_revision_service import RepairProvider,repair_context
+    package=revision_package(plan_id)
+    if request.component_name and request.source_hash is not None:
+        from Backend.AI.app.services.component_source_service import repair_sources
+        if request.source_hash != package['sourceHash']:
+            raise HTTPException(409,'Source changed. Reload before repairing.')
+        try:
+            from Backend.AI.app.services.planning_performance import measured_repair
+            with measured_repair(get_ai_provider(),plan_id) as measured:
+                files=repair_sources(package,request.component_name,request.instruction,measured)
+                return save_component_source(plan_id,package,request.component_name,files,request.source_hash)
+        except ValueError as error:raise HTTPException(422,str(error)) from error
+        except RuntimeError as error:raise HTTPException(502,str(error)) from error
+    provider=RepairProvider(get_ai_provider(),repair_context(package,request.component_name))
+    try:return build_default_draft(package['requirement'],package['targetOrg'],provider,http_request,'Component repaired — approval required',repair_package=package)
+    except HTTPException:raise
+    except ValueError as error:raise HTTPException(422,planning_error_detail(error)) from error
+    except RuntimeError as error:raise HTTPException(502,str(error)) from error
+
+
+def save_component_source(plan_id, package, name, files, expected_hash):
+    from Backend.AI.app.validators.plan_validator import ImplementationPlan
+    from Backend.AI.app.services.component_source_service import apply_source_changes
+    updated=apply_source_changes(package,name,files,expected_hash,default_pipeline.fingerprint)
+    plan=ImplementationPlan.model_validate(updated['plan'])
+    plan.status='DRAFT'
+    for item in plan.items:item.approval='PENDING'
+    plan_store.save(plan)
+    metadata_spec_store.save_package(updated)
+    return default_package_response(plan_id)
+
+
+class ComponentSelectionRequest(BaseModel):
+    source_hash: str = Field(min_length=64, max_length=64)
+    components: list[str] = Field(min_length=1, max_length=500)
+
+
+@app.post('/api/plans/{plan_id}/selection')
+@layout_workflow.locked
+def select_plan_components(plan_id: str, request: ComponentSelectionRequest, http_request: Request):
+    from copy import deepcopy
+    from uuid import uuid4
+    from Backend.AI.app.services.component_selection_service import select_components
+    from Backend.AI.app.services.layout_selection_service import affected_objects, plan_fingerprint
+    from Backend.AI.app.validators.plan_validator import ImplementationPlan
+    from Backend.AI.app.account_api import user, db
+    original = revision_package(plan_id)
+    try:
+        package = select_components(original, request.components, request.source_hash, default_pipeline.fingerprint)
+        new_id = 'PLAN-' + uuid4().hex[:12]
+        package['id'] = new_id
+        package['plan']['id'] = new_id
+        package['plan']['status'] = 'DRAFT'
+        for item in package['plan']['items']:
+            item['approval'] = 'PENDING'
+        if package.get('metadataSpecification'):
+            package['metadataSpecification']['planId'] = new_id
+        plan = ImplementationPlan.model_validate(package['plan'])
+        package['sourceHash'] = default_pipeline.fingerprint(package)
+        state = layout_workflow._states.get(plan_id)
+        if state:
+            state = deepcopy(state)
+            affected = affected_objects(plan)
+            state['planFingerprint'] = plan_fingerprint(plan)
+            state['snapshotId'] = str(uuid4())
+            state['objects'] = [o for o in state['objects'] if o['object'] in affected]
+            for obj in state['objects']:
+                obj['fields'] = affected[obj['object']]['fields']
+            state['selected'] = {k: v for k, v in state['selected'].items() if k in affected}
+            layout_workflow._states[new_id] = state
+        plan_store.save(plan)
+        metadata_spec_store.save_package(package)
+        options = layout_workflow.options(new_id)
+        if options['ready']:
+            package = default_pipeline.prepare_review(package, plan, layout_workflow.require(plan))
+            metadata_spec_store.save_package(package)
+        owner = user(http_request)
+        with db() as connection:
+            connection.execute('INSERT INTO plans VALUES(?,?,?)', (new_id, owner['id'], package['targetOrg']))
+        return default_package_response(new_id)
+    except ValueError as error:
+        raise HTTPException(422, str(error)) from error
+
+
+@app.post('/api/plans/{plan_id}/source')
+@layout_workflow.locked
+def edit_component_source(plan_id:str,request:SourceEditRequest):
+    package=revision_package(plan_id)
+    try:return save_component_source(plan_id,package,request.component_name,request.files,request.source_hash)
+    except ValueError as error:raise HTTPException(422,str(error)) from error
+
+
+# SQLite stores the exact package and layout review state, including running jobs.
+def persist_workspace_package(package):
+    from Backend.AI.app.account_api import current_account,current_org,db
+    owner=current_account.get();org=current_org.get()
+    if not owner or org!=package.get('targetOrg'):return
+    plan_id=package['plan']['id'];plan=plan_store.get(plan_id)
+    if not plan:return
+    snapshot={'package':package,'plan':plan.model_dump(),'layoutState':layout_workflow._states.get(plan_id)}
+    with db() as c:
+        if not c.execute('SELECT id FROM orgs WHERE id=? AND user_id=?',(org,owner)).fetchone():
+            raise HTTPException(403,'This org is no longer connected to your account.')
+        payload=json.dumps(snapshot,sort_keys=True,separators=(',',':'))
+        prior=c.execute('SELECT payload FROM workspace_packages WHERE id=? AND user_id=? AND org_id=?',(plan_id,owner,org)).fetchone()
+        if not prior or prior['payload']!=payload:
+            c.execute('INSERT OR REPLACE INTO workspace_packages VALUES(?,?,?,?)',(plan_id,owner,org,payload))
+        if package.get('state') in {'running','pending','unknown'}:
+            c.execute('INSERT INTO monitor_jobs VALUES(?,?,?,?) ON CONFLICT(plan_id) DO UPDATE SET next_poll=excluded.next_poll', (plan_id,owner,org, time.time()+5))
+        else:
+            c.execute('DELETE FROM monitor_jobs WHERE plan_id=? AND user_id=? AND org_id=?',(plan_id,owner,org))
+    from Backend.AI.app.services.job_notifications import notify
+    notify()
+
+
+def restore_workspace_package(plan_id,owner,org):
+    from Backend.AI.app.services.app_database import postgres_enabled
+    if postgres_enabled():
+        return _restore_workspace_package_locked(plan_id,owner,org,force=True)
+    if plan_store.get(plan_id) is not None and metadata_spec_store.get_package(plan_id) is not None:
+        return
+    return _restore_workspace_package_locked(plan_id,owner,org)
+
+
+@layout_workflow.locked
+def _restore_workspace_package_locked(plan_id,owner,org,force=False):
+    if not force and plan_store.get(plan_id) and metadata_spec_store.get_package(plan_id):return
+    from Backend.AI.app.account_api import db
+    from Backend.AI.app.validators.plan_validator import ImplementationPlan
+    with db() as c:row=c.execute('SELECT payload FROM workspace_packages WHERE id=? AND user_id=? AND org_id=?',(plan_id,owner,org)).fetchone()
+    if not row:return
+    try:
+        from copy import deepcopy
+        snapshot=json.loads(row['payload']);package=snapshot['package']
+        corrected_result = False
+        if package.get('state') == 'deployed' and package.get('lastResult', {}).get('result', {}).get('checkOnly') is True:
+            package.update(state='unknown', validatedHash=None,
+                error='The saved result is validation-only. No real deployment is confirmed.',
+                nextAction='Inspect the saved Salesforce job and backend deployment logs before retrying.')
+            corrected_result = True
+        if package['targetOrg']!=org or package['plan']['id']!=plan_id:raise ValueError('Saved package identity mismatch.')
+        default_pipeline.verify_package(package)
+        plan=ImplementationPlan.model_validate(snapshot['plan'])
+        default_pipeline.assert_plan(package,plan)
+        plan_store.save(plan)
+        if package.get('state')=='running' and not force:
+            package.update(state='unknown',validatedHash=None,error='The backend restarted during submission. Review Salesforce Deployment Status before retrying.',
+                nextAction='Inspect the saved job if available; do not submit another deployment until the original outcome is confirmed.')
+        if snapshot.get('layoutState'):layout_workflow._states[plan_id]=snapshot['layoutState']
+        # Refreshing an unchanged snapshot must not emit new jobs or metrics.
+        if corrected_result or (not force and package.get('state') == 'unknown'):
+            metadata_spec_store.save_package(package)
+        else:
+            metadata_spec_store._packages[plan_id] = deepcopy(package)
+    except (ValueError,KeyError,TypeError) as error:
+        raise HTTPException(409,'Saved package could not be restored safely. Generate a new plan from its saved requirement.') from error
+
+
+def persist_and_measure_package(package):
+    persist_workspace_package(package)
+    from Backend.AI.app.services.evaluation_service import safe_observe_package
+    safe_observe_package(package)
+
+
+metadata_spec_store.on_save=persist_and_measure_package
+
+
+# A single-process development worker follows persisted jobs without an open browser.
+# Multiple production workers require a durable queue/lease instead of this thread.
+_job_stop = None
+_job_thread = None
+
+def start_saved_job_monitor():
+    global _job_stop, _job_thread
+    from threading import Event, Thread
+    from Backend.AI.app.services.saved_job_monitor import monitor_saved_jobs
+    _job_stop=Event()
+    _job_thread=Thread(target=monitor_saved_jobs,args=(_job_stop,),daemon=True,name='salesforce-job-monitor')
+    _job_thread.start()
+
+def stop_saved_job_monitor():
+    if _job_stop:_job_stop.set()
+
+from contextlib import asynccontextmanager
+@asynccontextmanager
+async def workspace_lifespan(app):
+    import os
+    from Backend.AI.app.services.app_database import postgres_enabled
+    external = os.getenv('APP_JOB_MODE', 'inline') == 'external'
+    if external and (not postgres_enabled() or not os.getenv('APP_ENCRYPTION_KEY')):
+        raise RuntimeError('External jobs require Postgres and a shared APP_ENCRYPTION_KEY.')
+    if os.getenv('APP_BACKGROUND_JOBS','false').lower()=='true' and not external:
+        raise RuntimeError('Background operations require APP_JOB_MODE=external.')
+    if not external:
+        start_saved_job_monitor()
+    try:yield
+    finally:stop_saved_job_monitor()
+app.router.lifespan_context=workspace_lifespan
+
+
+@app.get('/api/plans/{plan_id}/status')
+def saved_package_status(plan_id:str):
+    # Progress reads must not wait behind a long worker submission lock.
+    from Backend.AI.app.account_api import db,current_account,current_org
+    with db() as connection:
+        row=connection.execute('SELECT payload FROM workspace_packages WHERE id=? AND user_id=? AND org_id=?', (plan_id,current_account.get(),current_org.get())).fetchone()
+    package=json.loads(row['payload'])['package'] if row else metadata_spec_store.get_package(plan_id)
+    if not package:raise HTTPException(404,'Generated package not found.')
+    if package['targetOrg']!=target_org():raise HTTPException(403,'This package belongs to a different org.')
+    if package.get('state') in {'queued','running'} and package.get('backgroundJobId') and not package.get('jobId'):
+        with db() as connection:
+            job=connection.execute('SELECT state,result FROM background_jobs WHERE id=? AND user_id=? AND org_id=?', (package['backgroundJobId'],current_account.get(),current_org.get())).fetchone()
+        if job and job['state'] in {'failed','unknown'}:
+            package.update(state=job['state'],error=json.loads(job['result'] or '{}').get('detail'),nextAction='Inspect the saved operation before retrying.')
+    return {key:package.get(key) for key in ('state','jobId','operation','sourceHash','validatedHash','error','nextAction')}
+
+
+@app.get('/api/evaluation/summary')
+def evaluation_summary(request: Request, org_id: str | None = None):
+    from Backend.AI.app.account_api import user, db
+    from Backend.AI.app.services.evaluation_service import summary
+    account = user(request)
+    if org_id:
+        with db() as c:
+            owned = c.execute('SELECT id FROM orgs WHERE id=? AND user_id=?', (org_id, account['id'])).fetchone()
+        if not owned:
+            raise HTTPException(404, 'Org not found.')
+    return summary(account['id'], org_id)
+
+
+@app.get('/api/jobs/{job_id}')
+def background_job_status(job_id: str):
+    from Backend.AI.app.account_api import current_account
+    from Backend.AI.app.services.background_jobs import get_owned
+    return get_owned(job_id,current_account.get())

@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, model_validator
 from Backend.AI.app.services.salesforce_capability_registry import (
     SalesforceCapabilityRegistry,
 )
+from Backend.AI.app.services.apex_validator import validate_apex_source
 
 
 # =========================================================
@@ -17,7 +18,7 @@ SUPPORTED_ACTION = "CREATE"
 
 # Phase 1 executable metadata-spec families.
 #
-# Flow / Apex / LWC / application metadata are intentionally
+# Apex / LWC / application metadata are intentionally
 # not accepted here yet. They are known by the capability
 # registry and planning layer, but each will receive its own
 # metadata/code specification and generator in later phases.
@@ -25,6 +26,9 @@ SUPPORTED_METADATA_TYPES = {
     "CustomObject",
     "CustomField",
     "ValidationRule",
+    "Flow",
+    "ApexClass",
+    "ApexTrigger",
 }
 
 SUPPORTED_FIELD_TYPES = set(
@@ -125,6 +129,8 @@ class MetadataItem(BaseModel):
     - CustomObject
     - CustomField
     - ValidationRule
+    - Flow (strict supported trigger/resource contracts)
+    - ApexClass and ApexTrigger (local checks; Salesforce compilation required)
 
     Planning may know about additional Salesforce component
     types, but those types must not enter this specification
@@ -141,6 +147,9 @@ class MetadataItem(BaseModel):
         "CustomObject",
         "CustomField",
         "ValidationRule",
+        "Flow",
+        "ApexClass",
+        "ApexTrigger",
     ]
 
     fullName: str = Field(
@@ -167,6 +176,8 @@ class MetadataItem(BaseModel):
     def validate_metadata_item(
         self,
     ):
+        from Backend.AI.app.services.metadata_safety import validate_component_name
+        validate_component_name(self.metadataType, self.fullName)
         if self.metadataType == "CustomObject":
             self._validate_custom_object()
 
@@ -176,7 +187,33 @@ class MetadataItem(BaseModel):
         elif self.metadataType == "ValidationRule":
             self._validate_validation_rule()
 
+        elif self.metadataType == "Flow":
+            from Backend.AI.app.validators.flow_validator import validate_flow
+            validate_flow(self.fullName, self.label, self.config)
+
+        elif self.metadataType in {"ApexClass", "ApexTrigger"}:
+            self._validate_apex()
+
         return self
+
+    def _validate_apex(self) -> None:
+        allowed = {"apexKind", "body"} if self.metadataType == "ApexClass" else {"sobject", "events", "body"}
+        unsupported = set(self.config.keys()) - allowed
+        if unsupported:
+            raise ValueError(
+                f"Unsupported {self.metadataType} config: "
+                + ", ".join(sorted(unsupported))
+            )
+        errors, _warnings = validate_apex_source(
+            self.metadataType,
+            self.fullName,
+            self.config,
+        )
+        if errors:
+            raise ValueError(
+                f"{self.metadataType} validation failed: "
+                + "; ".join(errors)
+            )
 
     # =====================================================
     # Generic helpers
@@ -335,6 +372,7 @@ class MetadataItem(BaseModel):
             )
 
         allowed_config = {
+            "enableReports",
             "pluralLabel",
             "nameFieldLabel",
             "nameFieldType",
@@ -358,6 +396,9 @@ class MetadataItem(BaseModel):
                     )
                 )
             )
+
+        if "enableReports" in self.config and not isinstance(self.config["enableReports"], bool):
+            raise ValueError("CustomObject enableReports must be boolean.")
 
         name_field_type = self.config.get(
             "nameFieldType"
@@ -1225,6 +1266,8 @@ class MetadataItem(BaseModel):
             ),
         )
 
+        validate_formula_regex_escaping(formula)
+
         error_message = self.config.get(
             "errorMessage"
         )
@@ -1383,3 +1426,33 @@ def validate_metadata_spec(
                 str(exc)
             ],
         )
+
+
+def validate_formula_regex_escaping(formula: str) -> None:
+    """Catch the known invalid single-backslash-plus string escape.
+
+    This is a focused lexical check, not a Salesforce formula compiler.
+    Preserve correctly doubled backslashes and ignore block comments.
+    """
+    quoted = False
+    index = 0
+    while index < len(formula):
+        if not quoted and formula.startswith('/*', index):
+            end = formula.find('*/', index + 2)
+            if end < 0:
+                return  # Salesforce compilation handles malformed comments.
+            index = end + 2
+            continue
+        char = formula[index]
+        if char == '"':
+            quoted = not quoted
+        elif quoted and char == chr(92):
+            if index + 1 < len(formula) and formula[index + 1] == '+':
+                raise ValueError(
+                    'Invalid single-backslash-plus escape in errorConditionFormula '
+                    f'at character {index + 1}. Use [+] for a literal plus in REGEX, '
+                    'or correctly double the formula backslash before JSON serialization. '
+                    'Correct the plan before approval; XML CDATA does not fix formula escapes.'
+                )
+            index += 1  # Skip escaped character, including another backslash.
+        index += 1

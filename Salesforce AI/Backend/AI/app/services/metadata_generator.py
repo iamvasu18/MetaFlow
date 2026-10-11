@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from Backend.AI.app.services.metadata_safety import component_path, safe_source_target
 from xml.sax.saxutils import escape
 
 from Backend.AI.app.validators.plan_validator import (
@@ -28,6 +29,7 @@ class SalesforceMetadataGenerator:
     - CustomObject
     - CustomField
     - ValidationRule
+    - Flow (strict before-save v1 subset)
 
     Supported CustomField families:
 
@@ -112,6 +114,11 @@ class SalesforceMetadataGenerator:
             plan
         )
 
+        candidates = plan.items
+        for candidate in candidates:
+            if candidate.action == "CREATE":
+                safe_source_target(self.project_root, component_path(candidate.metadataType, candidate.fullName).as_posix())
+
         generated_files: list[str] = []
 
         for item in plan.items:
@@ -151,6 +158,11 @@ class SalesforceMetadataGenerator:
                 "validation issues."
             )
 
+        candidates = specification.metadata
+        for candidate in candidates:
+            if candidate.action == "CREATE":
+                safe_source_target(self.project_root, component_path(candidate.metadataType, candidate.fullName).as_posix())
+
         generated_files: list[str] = []
 
         for item in specification.metadata:
@@ -180,6 +192,12 @@ class SalesforceMetadataGenerator:
         item,
     ) -> Path | None:
 
+        safe_source_target(self.project_root, component_path(item.metadataType, item.fullName).as_posix())
+
+        if item.metadataType == "Flow":
+            from Backend.AI.app.services.flow_generator import generate_flow
+            return generate_flow(item, self.project_root)
+
         if item.metadataType == "CustomObject":
             return self._generate_custom_object(
                 item
@@ -194,6 +212,10 @@ class SalesforceMetadataGenerator:
             return self._generate_validation_rule(
                 item
             )
+
+        if item.metadataType in {"ApexClass", "ApexTrigger"}:
+            from Backend.AI.app.services.apex_generator import generate_apex
+            return generate_apex(item, self.project_root)
 
         raise ValueError(
             "Unsupported Salesforce metadata type: "
@@ -273,6 +295,7 @@ class SalesforceMetadataGenerator:
     </nameField>
     <deploymentStatus>{escape(str(deployment_status))}</deploymentStatus>
     <sharingModel>{escape(str(sharing_model))}</sharingModel>
+    <enableReports>{str(config.get("enableReports", False)).lower()}</enableReports>
 </CustomObject>
 """
 
@@ -450,6 +473,9 @@ class SalesforceMetadataGenerator:
                 "must contain errorConditionFormula."
             ),
         )
+
+        from Backend.AI.app.validators.metadata_spec_validator import validate_formula_regex_escaping
+        validate_formula_regex_escaping(formula)
 
         error_message = self._require_text(
             config.get(

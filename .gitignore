@@ -3,3 +3,26 @@
 node_modules/
 .sfdx/
 .sf/
+
+# Local configuration
+.env.*
+!.env.example
+!.env.sample
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Application data and private backups
+.app-data/
+stage2c-backup/
+runtime/
+
+# Build and test output
+dist/
+coverage/
+evaluation-results*.json
+*.log
+
+/Salesforce AI/verification/

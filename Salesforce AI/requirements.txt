@@ -4,3 +4,6 @@ pydantic
 pytest
 python-dotenv
 uvicorn
+anthropic
+tzdata
+tzdatacryptography

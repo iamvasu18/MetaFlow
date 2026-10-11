@@ -8,6 +8,8 @@ import xml.etree.ElementTree as ET
 
 from Backend.AI.app.services.page_layout_service import PageLayoutService, new_layout, write_xml, layout_path
 
+from Backend.AI.app.services.layout_selection_service import LayoutSelectionWorkflow
+
 import pytest
 from Backend.AI.app.services.profile_fls_service import (
     NS, SystemAdministratorFLSService, component_path,
@@ -152,6 +154,11 @@ def test_endpoint_wires_fls_into_same_deployment(tmp_path, monkeypatch):
         profile = ET.fromstring(f'<Profile xmlns="{NS}"><layoutAssignments><layout>Account-Account Layout</layout></layoutAssignments></Profile>')
         return profile, {'Account-Account Layout'}
     monkeypatch.setattr('Backend.AI.app.services.page_layout_service.PageLayoutService._retrieve', retrieve_layouts)
+    plan.items[0].config = {}
+    plan.status = 'DRAFT'
+    workflow = LayoutSelectionWorkflow(Obj(get=lambda _: plan), tmp_path)
+    assert workflow.options(plan.id)['ready']
+    plan.status = 'APPROVED'
     seen = {}
     class Generator:
         def __init__(self, project_root): self.root = Path(project_root)
@@ -171,7 +178,7 @@ def test_endpoint_wires_fls_into_same_deployment(tmp_path, monkeypatch):
             command = SalesforceDeploymentService(project_root=self.root).build_deploy_command(plan, validation_result)
             assert command.count('--source-dir') == 3
             return {'success': True}
-    env = dict(Path=Path, tempfile=tempfile, HTTPException=HTTPException,
+    env = dict(Path=Path, tempfile=tempfile, HTTPException=HTTPException, layout_workflow=workflow,
         plan_store=Obj(get=lambda _: plan), metadata_spec_store=Obj(get=lambda _: spec),
         validate_create_specification=validate_create_specification,
         initialize_deployment_project=initialize_deployment_project, component_path=component_path,

@@ -1,0 +1,2893 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "ActionNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Action",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "actionName": {
+          "maxLength": 255,
+          "pattern": "^[A-Za-z][A-Za-z0-9_.]*$",
+          "title": "Actionname",
+          "type": "string"
+        },
+        "actionType": {
+          "enum": [
+            "apex",
+            "emailAlert",
+            "emailSimple"
+          ],
+          "title": "Actiontype",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/CallInput"
+          },
+          "maxItems": 50,
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/CallOutput"
+          },
+          "maxItems": 50,
+          "title": "Outputs",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "actionName",
+        "actionType",
+        "next"
+      ],
+      "title": "ActionNode",
+      "type": "object"
+    },
+    "CallInput": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "CallInput",
+      "type": "object"
+    },
+    "CallOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "variable": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Variable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "variable"
+      ],
+      "title": "CallOutput",
+      "type": "object"
+    },
+    "ConstantResource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/FlowValue"
+        }
+      },
+      "required": [
+        "name",
+        "dataType",
+        "value"
+      ],
+      "title": "ConstantResource",
+      "type": "object"
+    },
+    "CreateRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "CreateRecords",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "inputAssignments": {
+          "items": {
+            "$ref": "#/$defs/FlowInputAssignment"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Inputassignments",
+          "type": "array"
+        },
+        "assignRecordIdTo": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Assignrecordidto"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "inputAssignments",
+        "next"
+      ],
+      "title": "CreateRecord",
+      "type": "object"
+    },
+    "DeleteRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "DeleteRecordById",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "recordId": {
+          "$ref": "#/$defs/FlowRecordReference"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "recordId",
+        "next"
+      ],
+      "title": "DeleteRecord",
+      "type": "object"
+    },
+    "DynamicChoiceSet": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "Picklist",
+            "Records"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "dataType": {
+          "default": "String",
+          "enum": [
+            "String",
+            "Picklist",
+            "Multipicklist"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "picklistField": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Picklistfield"
+        },
+        "displayField": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Displayfield"
+        },
+        "valueField": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Valuefield"
+        },
+        "filters": {
+          "items": {
+            "$ref": "#/$defs/QueryFilter"
+          },
+          "maxItems": 20,
+          "title": "Filters",
+          "type": "array"
+        },
+        "limit": {
+          "default": 100,
+          "maximum": 200,
+          "minimum": 1,
+          "title": "Limit",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "mode",
+        "object"
+      ],
+      "title": "DynamicChoiceSet",
+      "type": "object"
+    },
+    "ExpressionResource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "expression": {
+          "maxLength": 3900,
+          "minLength": 1,
+          "title": "Expression",
+          "type": "string"
+        },
+        "scale": {
+          "default": 0,
+          "maximum": 17,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "dataType",
+        "expression"
+      ],
+      "title": "ExpressionResource",
+      "type": "object"
+    },
+    "ExtendedFlowConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "contractVersion": {
+          "anyOf": [
+            {
+              "const": 2,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Contractversion"
+        },
+        "flowType": {
+          "enum": [
+            "Screen",
+            "Autolaunched",
+            "Scheduled",
+            "PlatformEvent",
+            "RecordTriggered"
+          ],
+          "title": "Flowtype",
+          "type": "string"
+        },
+        "triggerType": {
+          "anyOf": [
+            {
+              "enum": [
+                "Scheduled",
+                "PlatformEvent",
+                "RecordBeforeDelete",
+                "RecordBeforeSave",
+                "RecordAfterSave"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Triggertype"
+        },
+        "recordTriggerType": {
+          "anyOf": [
+            {
+              "enum": [
+                "Delete",
+                "Create",
+                "Update",
+                "CreateAndUpdate"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordtriggertype"
+        },
+        "object": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Object"
+        },
+        "status": {
+          "const": "Draft",
+          "title": "Status",
+          "type": "string"
+        },
+        "startElement": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Startelement",
+          "type": "string"
+        },
+        "elements": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "Action": "#/$defs/ActionNode",
+                "Assignment": "#/$defs/FlowAssignment",
+                "CollectionAssignment": "#/$defs/FlowCollectionAssignment",
+                "CreateRecords": "#/$defs/CreateRecord",
+                "Decision": "#/$defs/FlowDecision",
+                "DeleteRecordById": "#/$defs/DeleteRecord",
+                "GetRecords": "#/$defs/GetRecords",
+                "Loop": "#/$defs/FlowLoopNode",
+                "RecordCollection": "#/$defs/RecordCollectionOperation",
+                "Screen": "#/$defs/ScreenNode",
+                "Subflow": "#/$defs/SubflowNode",
+                "UpdateRecordById": "#/$defs/UpdateRecord"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/FlowDecision"
+              },
+              {
+                "$ref": "#/$defs/FlowAssignment"
+              },
+              {
+                "$ref": "#/$defs/ScreenNode"
+              },
+              {
+                "$ref": "#/$defs/GetRecords"
+              },
+              {
+                "$ref": "#/$defs/CreateRecord"
+              },
+              {
+                "$ref": "#/$defs/UpdateRecord"
+              },
+              {
+                "$ref": "#/$defs/DeleteRecord"
+              },
+              {
+                "$ref": "#/$defs/FlowCollectionAssignment"
+              },
+              {
+                "$ref": "#/$defs/FlowLoopNode"
+              },
+              {
+                "$ref": "#/$defs/SubflowNode"
+              },
+              {
+                "$ref": "#/$defs/ActionNode"
+              },
+              {
+                "$ref": "#/$defs/RecordCollectionOperation"
+              }
+            ]
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Elements",
+          "type": "array"
+        },
+        "variables": {
+          "items": {
+            "$ref": "#/$defs/ExtendedVariable"
+          },
+          "maxItems": 50,
+          "title": "Variables",
+          "type": "array"
+        },
+        "formulas": {
+          "items": {
+            "$ref": "#/$defs/FlowFormula"
+          },
+          "maxItems": 50,
+          "title": "Formulas",
+          "type": "array"
+        },
+        "constants": {
+          "items": {
+            "$ref": "#/$defs/ConstantResource"
+          },
+          "maxItems": 50,
+          "title": "Constants",
+          "type": "array"
+        },
+        "expressions": {
+          "items": {
+            "$ref": "#/$defs/ExpressionResource"
+          },
+          "maxItems": 50,
+          "title": "Expressions",
+          "type": "array"
+        },
+        "textTemplates": {
+          "items": {
+            "$ref": "#/$defs/TextTemplateResource"
+          },
+          "maxItems": 50,
+          "title": "Texttemplates",
+          "type": "array"
+        },
+        "dynamicChoices": {
+          "items": {
+            "$ref": "#/$defs/DynamicChoiceSet"
+          },
+          "maxItems": 50,
+          "title": "Dynamicchoices",
+          "type": "array"
+        },
+        "choices": {
+          "items": {
+            "$ref": "#/$defs/FlowChoiceResource"
+          },
+          "maxItems": 200,
+          "title": "Choices",
+          "type": "array"
+        },
+        "scheduledPaths": {
+          "items": {
+            "$ref": "#/$defs/ScheduledPath"
+          },
+          "maxItems": 10,
+          "title": "Scheduledpaths",
+          "type": "array"
+        },
+        "doesRequireRecordChangedToMeetCriteria": {
+          "default": false,
+          "title": "Doesrequirerecordchangedtomeetcriteria",
+          "type": "boolean"
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Schedule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "startFilters": {
+          "items": {
+            "$ref": "#/$defs/FlowRecordFilter"
+          },
+          "maxItems": 20,
+          "title": "Startfilters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "flowType",
+        "status",
+        "startElement",
+        "elements"
+      ],
+      "title": "ExtendedFlowConfig",
+      "type": "object"
+    },
+    "ExtendedVariable": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime",
+            "SObject"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "isCollection": {
+          "default": false,
+          "title": "Iscollection",
+          "type": "boolean"
+        },
+        "isInput": {
+          "default": false,
+          "title": "Isinput",
+          "type": "boolean"
+        },
+        "isOutput": {
+          "default": false,
+          "title": "Isoutput",
+          "type": "boolean"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "scale": {
+          "default": 0,
+          "maximum": 17,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "referenceTo": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Referenceto"
+        },
+        "objectType": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Objecttype"
+        }
+      },
+      "required": [
+        "name",
+        "dataType"
+      ],
+      "title": "ExtendedVariable",
+      "type": "object"
+    },
+    "FlowAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Assignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "assignments": {
+          "items": {
+            "$ref": "#/$defs/FlowAssignmentItem"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Assignments",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "assignments",
+        "next"
+      ],
+      "title": "FlowAssignment",
+      "type": "object"
+    },
+    "FlowAssignmentItem": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "pattern": "^(?:\\$Record|[A-Za-z][A-Za-z0-9_]*)(?:\\.[A-Za-z][A-Za-z0-9_]*)?$",
+          "title": "Field",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "value"
+      ],
+      "title": "FlowAssignmentItem",
+      "type": "object"
+    },
+    "FlowChoiceResource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "choiceText": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Choicetext",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/FlowValue"
+        }
+      },
+      "required": [
+        "name",
+        "choiceText",
+        "dataType",
+        "value"
+      ],
+      "title": "FlowChoiceResource",
+      "type": "object"
+    },
+    "FlowCollectionAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "CollectionAssignment",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "collection": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Collection",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "Add",
+            "RemoveAll"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "collection",
+        "operator",
+        "value",
+        "next"
+      ],
+      "title": "FlowCollectionAssignment",
+      "type": "object"
+    },
+    "FlowCondition": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "pattern": "^(?:\\$Record|[A-Za-z][A-Za-z0-9_]*)(?:\\.[A-Za-z][A-Za-z0-9_]*)?$",
+          "title": "Field",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "IsNull",
+            "EqualTo",
+            "NotEqualTo",
+            "GreaterThan",
+            "GreaterThanOrEqualTo",
+            "LessThan",
+            "LessThanOrEqualTo",
+            "Contains",
+            "StartsWith",
+            "EndsWith"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "operator",
+        "value"
+      ],
+      "title": "FlowCondition",
+      "type": "object"
+    },
+    "FlowConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "flowType": {
+          "const": "RecordTriggered",
+          "title": "Flowtype",
+          "type": "string"
+        },
+        "triggerType": {
+          "enum": [
+            "RecordBeforeSave",
+            "RecordAfterSave"
+          ],
+          "title": "Triggertype",
+          "type": "string"
+        },
+        "recordTriggerType": {
+          "enum": [
+            "Create",
+            "Update",
+            "CreateAndUpdate"
+          ],
+          "title": "Recordtriggertype",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "status": {
+          "const": "Draft",
+          "title": "Status",
+          "type": "string"
+        },
+        "startElement": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Startelement",
+          "type": "string"
+        },
+        "elements": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "Assignment": "#/$defs/FlowAssignment",
+                "CreateRecords": "#/$defs/FlowCreateRecords",
+                "Decision": "#/$defs/FlowDecision",
+                "UpdateRecords": "#/$defs/FlowUpdateRecords"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/FlowDecision"
+              },
+              {
+                "$ref": "#/$defs/FlowAssignment"
+              },
+              {
+                "$ref": "#/$defs/FlowCreateRecords"
+              },
+              {
+                "$ref": "#/$defs/FlowUpdateRecords"
+              }
+            ]
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Elements",
+          "type": "array"
+        },
+        "variables": {
+          "items": {
+            "$ref": "#/$defs/FlowVariable"
+          },
+          "maxItems": 50,
+          "title": "Variables",
+          "type": "array"
+        },
+        "formulas": {
+          "items": {
+            "$ref": "#/$defs/FlowFormula"
+          },
+          "maxItems": 50,
+          "title": "Formulas",
+          "type": "array"
+        }
+      },
+      "required": [
+        "flowType",
+        "triggerType",
+        "recordTriggerType",
+        "object",
+        "status",
+        "startElement",
+        "elements"
+      ],
+      "title": "FlowConfig",
+      "type": "object"
+    },
+    "FlowCreateRecords": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "CreateRecords",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "inputAssignments": {
+          "items": {
+            "$ref": "#/$defs/FlowInputAssignment"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Inputassignments",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "inputAssignments",
+        "next"
+      ],
+      "title": "FlowCreateRecords",
+      "type": "object"
+    },
+    "FlowDecision": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Decision",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "rules": {
+          "items": {
+            "$ref": "#/$defs/FlowRule"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Rules",
+          "type": "array"
+        },
+        "defaultLabel": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Defaultlabel",
+          "type": "string"
+        },
+        "defaultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Defaultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "rules",
+        "defaultLabel",
+        "defaultNext"
+      ],
+      "title": "FlowDecision",
+      "type": "object"
+    },
+    "FlowFormula": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sourceField": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Sourcefield",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "expression": {
+          "maxLength": 3900,
+          "minLength": 1,
+          "title": "Expression",
+          "type": "string"
+        },
+        "scale": {
+          "default": 0,
+          "maximum": 17,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "sourceFingerprint": {
+          "pattern": "^[a-f0-9]{64}$",
+          "title": "Sourcefingerprint",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sourceField",
+        "dataType",
+        "expression",
+        "sourceFingerprint"
+      ],
+      "title": "FlowFormula",
+      "type": "object"
+    },
+    "FlowInputAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Field",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "value"
+      ],
+      "title": "FlowInputAssignment",
+      "type": "object"
+    },
+    "FlowLoopNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Loop",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "collection": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Collection",
+          "type": "string"
+        },
+        "currentItem": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Currentitem",
+          "type": "string"
+        },
+        "iterationOrder": {
+          "default": "Asc",
+          "enum": [
+            "Asc",
+            "Desc"
+          ],
+          "title": "Iterationorder",
+          "type": "string"
+        },
+        "nextValue": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Nextvalue",
+          "type": "string"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "collection",
+        "currentItem",
+        "nextValue",
+        "next"
+      ],
+      "title": "FlowLoopNode",
+      "type": "object"
+    },
+    "FlowRecordFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Field",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "EqualTo",
+            "NotEqualTo",
+            "GreaterThan",
+            "GreaterThanOrEqualTo",
+            "LessThan",
+            "LessThanOrEqualTo",
+            "IsNull"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/FlowValue"
+        }
+      },
+      "required": [
+        "field",
+        "operator",
+        "value"
+      ],
+      "title": "FlowRecordFilter",
+      "type": "object"
+    },
+    "FlowRecordReference": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "Reference",
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "pattern": "^(?:\\$Record|[A-Za-z][A-Za-z0-9_]*)(?:\\.[A-Za-z][A-Za-z0-9_]*)?$",
+          "title": "Value",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "FlowRecordReference",
+      "type": "object"
+    },
+    "FlowRule": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "conditionLogic": {
+          "enum": [
+            "and",
+            "or"
+          ],
+          "title": "Conditionlogic",
+          "type": "string"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/FlowCondition"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "conditionLogic",
+        "conditions",
+        "next"
+      ],
+      "title": "FlowRule",
+      "type": "object"
+    },
+    "FlowUpdateRecords": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "UpdateRecords",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "inputAssignments": {
+          "items": {
+            "$ref": "#/$defs/FlowInputAssignment"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Inputassignments",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        },
+        "relationshipField": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Relationshipfield",
+          "type": "string"
+        },
+        "filters": {
+          "items": {
+            "$ref": "#/$defs/FlowRecordFilter"
+          },
+          "maxItems": 20,
+          "title": "Filters",
+          "type": "array"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "inputAssignments",
+        "next",
+        "relationshipField"
+      ],
+      "title": "FlowUpdateRecords",
+      "type": "object"
+    },
+    "FlowValue": {
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean",
+            "Date",
+            "DateTime"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ],
+      "title": "FlowValue",
+      "type": "object"
+    },
+    "FlowVariable": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "dataType": {
+          "enum": [
+            "String",
+            "Number",
+            "Boolean"
+          ],
+          "title": "Datatype",
+          "type": "string"
+        },
+        "value": {
+          "$ref": "#/$defs/FlowValue"
+        },
+        "scale": {
+          "default": 0,
+          "maximum": 17,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "dataType",
+        "value"
+      ],
+      "title": "FlowVariable",
+      "type": "object"
+    },
+    "GetRecords": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "GetRecords",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "filters": {
+          "items": {
+            "$ref": "#/$defs/QueryFilter"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Filters",
+          "type": "array"
+        },
+        "outputAssignments": {
+          "items": {
+            "$ref": "#/$defs/OutputAssignment"
+          },
+          "maxItems": 30,
+          "title": "Outputassignments",
+          "type": "array"
+        },
+        "outputReference": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Outputreference"
+        },
+        "getFirstRecordOnly": {
+          "default": true,
+          "title": "Getfirstrecordonly",
+          "type": "boolean"
+        },
+        "queriedFields": {
+          "items": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 100,
+          "title": "Queriedfields",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "filters",
+        "next"
+      ],
+      "title": "GetRecords",
+      "type": "object"
+    },
+    "OutputAssignment": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Field",
+          "type": "string"
+        },
+        "variable": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Variable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "variable"
+      ],
+      "title": "OutputAssignment",
+      "type": "object"
+    },
+    "QueryFilter": {
+      "additionalProperties": false,
+      "properties": {
+        "field": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Field",
+          "type": "string"
+        },
+        "operator": {
+          "enum": [
+            "EqualTo",
+            "NotEqualTo",
+            "GreaterThan",
+            "GreaterThanOrEqualTo",
+            "LessThan",
+            "LessThanOrEqualTo",
+            "IsNull",
+            "Contains",
+            "StartsWith",
+            "EndsWith"
+          ],
+          "title": "Operator",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "field",
+        "operator",
+        "value"
+      ],
+      "title": "QueryFilter",
+      "type": "object"
+    },
+    "RecordCollectionOperation": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "RecordCollection",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "operation": {
+          "enum": [
+            "Create",
+            "Update",
+            "Delete"
+          ],
+          "title": "Operation",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "inputReference": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Inputreference",
+          "type": "string"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "operation",
+        "object",
+        "inputReference",
+        "next"
+      ],
+      "title": "RecordCollectionOperation",
+      "type": "object"
+    },
+    "Schedule": {
+      "additionalProperties": false,
+      "properties": {
+        "frequency": {
+          "enum": [
+            "Once",
+            "Daily",
+            "Weekly"
+          ],
+          "title": "Frequency",
+          "type": "string"
+        },
+        "startDate": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "title": "Startdate",
+          "type": "string"
+        },
+        "startTime": {
+          "pattern": "^\\d{2}:\\d{2}:\\d{2}$",
+          "title": "Starttime",
+          "type": "string"
+        },
+        "timeZone": {
+          "maxLength": 80,
+          "minLength": 1,
+          "title": "Timezone",
+          "type": "string"
+        }
+      },
+      "required": [
+        "frequency",
+        "startDate",
+        "startTime",
+        "timeZone"
+      ],
+      "title": "Schedule",
+      "type": "object"
+    },
+    "ScheduledPath": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "next": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Next",
+          "type": "string"
+        },
+        "pathType": {
+          "anyOf": [
+            {
+              "const": "AsyncAfterCommit",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pathtype"
+        },
+        "timeSource": {
+          "anyOf": [
+            {
+              "enum": [
+                "RecordTriggerEvent",
+                "RecordField"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timesource"
+        },
+        "recordField": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Recordfield"
+        },
+        "offsetNumber": {
+          "anyOf": [
+            {
+              "maximum": 999,
+              "minimum": -999,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offsetnumber"
+        },
+        "offsetUnit": {
+          "anyOf": [
+            {
+              "enum": [
+                "Minutes",
+                "Hours",
+                "Days"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offsetunit"
+        }
+      },
+      "required": [
+        "name",
+        "label",
+        "next"
+      ],
+      "title": "ScheduledPath",
+      "type": "object"
+    },
+    "ScreenField": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "fieldType": {
+          "enum": [
+            "InputField",
+            "DisplayText",
+            "LargeTextArea",
+            "PasswordField",
+            "DropdownBox",
+            "RadioButtons",
+            "MultiSelectCheckboxes",
+            "MultiSelectPicklist",
+            "ComponentInstance"
+          ],
+          "title": "Fieldtype",
+          "type": "string"
+        },
+        "fieldText": {
+          "maxLength": 3000,
+          "minLength": 1,
+          "title": "Fieldtext",
+          "type": "string"
+        },
+        "dataType": {
+          "anyOf": [
+            {
+              "enum": [
+                "String",
+                "Number",
+                "Boolean",
+                "Date",
+                "DateTime",
+                "Currency"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datatype"
+        },
+        "isRequired": {
+          "default": false,
+          "title": "Isrequired",
+          "type": "boolean"
+        },
+        "scale": {
+          "default": 0,
+          "maximum": 17,
+          "minimum": 0,
+          "title": "Scale",
+          "type": "integer"
+        },
+        "referenceTo": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Referenceto"
+        },
+        "extensionName": {
+          "anyOf": [
+            {
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*:[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Extensionname"
+        },
+        "inputParameters": {
+          "items": {
+            "$ref": "#/$defs/ScreenInputParameter"
+          },
+          "maxItems": 50,
+          "title": "Inputparameters",
+          "type": "array"
+        },
+        "outputParameters": {
+          "items": {
+            "$ref": "#/$defs/ScreenOutputParameter"
+          },
+          "maxItems": 50,
+          "title": "Outputparameters",
+          "type": "array"
+        },
+        "choiceReferences": {
+          "items": {
+            "maxLength": 80,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "maxItems": 200,
+          "title": "Choicereferences",
+          "type": "array"
+        },
+        "defaultSelectedChoiceReference": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defaultselectedchoicereference"
+        },
+        "defaultValue": {
+          "anyOf": [
+            {
+              "discriminator": {
+                "mapping": {
+                  "Boolean": "#/$defs/FlowValue",
+                  "Date": "#/$defs/FlowValue",
+                  "DateTime": "#/$defs/FlowValue",
+                  "Number": "#/$defs/FlowValue",
+                  "Reference": "#/$defs/FlowRecordReference",
+                  "String": "#/$defs/FlowValue"
+                },
+                "propertyName": "type"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/FlowValue"
+                },
+                {
+                  "$ref": "#/$defs/FlowRecordReference"
+                }
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Defaultvalue"
+        },
+        "helpText": {
+          "anyOf": [
+            {
+              "maxLength": 3000,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Helptext"
+        },
+        "visibilityRule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScreenVisibility"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "validationRule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScreenValidation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "fieldType",
+        "fieldText"
+      ],
+      "title": "ScreenField",
+      "type": "object"
+    },
+    "ScreenInputParameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "value": {
+          "discriminator": {
+            "mapping": {
+              "Boolean": "#/$defs/FlowValue",
+              "Date": "#/$defs/FlowValue",
+              "DateTime": "#/$defs/FlowValue",
+              "Number": "#/$defs/FlowValue",
+              "Reference": "#/$defs/FlowRecordReference",
+              "String": "#/$defs/FlowValue"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/FlowValue"
+            },
+            {
+              "$ref": "#/$defs/FlowRecordReference"
+            }
+          ],
+          "title": "Value"
+        }
+      },
+      "required": [
+        "name",
+        "value"
+      ],
+      "title": "ScreenInputParameter",
+      "type": "object"
+    },
+    "ScreenNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Screen",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "fields": {
+          "items": {
+            "$ref": "#/$defs/ScreenField"
+          },
+          "maxItems": 30,
+          "minItems": 1,
+          "title": "Fields",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "allowBack": {
+          "default": false,
+          "title": "Allowback",
+          "type": "boolean"
+        },
+        "allowFinish": {
+          "default": true,
+          "title": "Allowfinish",
+          "type": "boolean"
+        },
+        "allowPause": {
+          "default": false,
+          "title": "Allowpause",
+          "type": "boolean"
+        },
+        "showFooter": {
+          "default": true,
+          "title": "Showfooter",
+          "type": "boolean"
+        },
+        "showHeader": {
+          "default": true,
+          "title": "Showheader",
+          "type": "boolean"
+        },
+        "backButtonLabel": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Backbuttonlabel"
+        },
+        "nextOrFinishButtonLabel": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Nextorfinishbuttonlabel"
+        },
+        "pauseButtonLabel": {
+          "anyOf": [
+            {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pausebuttonlabel"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "fields",
+        "next"
+      ],
+      "title": "ScreenNode",
+      "type": "object"
+    },
+    "ScreenOutputParameter": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "variable": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Variable",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "variable"
+      ],
+      "title": "ScreenOutputParameter",
+      "type": "object"
+    },
+    "ScreenValidation": {
+      "additionalProperties": false,
+      "properties": {
+        "formulaExpression": {
+          "maxLength": 3900,
+          "minLength": 1,
+          "title": "Formulaexpression",
+          "type": "string"
+        },
+        "errorMessage": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Errormessage",
+          "type": "string"
+        }
+      },
+      "required": [
+        "formulaExpression",
+        "errorMessage"
+      ],
+      "title": "ScreenValidation",
+      "type": "object"
+    },
+    "ScreenVisibility": {
+      "additionalProperties": false,
+      "properties": {
+        "conditionLogic": {
+          "default": "and",
+          "enum": [
+            "and",
+            "or"
+          ],
+          "title": "Conditionlogic",
+          "type": "string"
+        },
+        "conditions": {
+          "items": {
+            "$ref": "#/$defs/FlowCondition"
+          },
+          "maxItems": 20,
+          "minItems": 1,
+          "title": "Conditions",
+          "type": "array"
+        }
+      },
+      "required": [
+        "conditions"
+      ],
+      "title": "ScreenVisibility",
+      "type": "object"
+    },
+    "SubflowNode": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "Subflow",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "flowName": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Flowname",
+          "type": "string"
+        },
+        "inputs": {
+          "items": {
+            "$ref": "#/$defs/CallInput"
+          },
+          "maxItems": 50,
+          "title": "Inputs",
+          "type": "array"
+        },
+        "outputs": {
+          "items": {
+            "$ref": "#/$defs/CallOutput"
+          },
+          "maxItems": 50,
+          "title": "Outputs",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "flowName",
+        "next"
+      ],
+      "title": "SubflowNode",
+      "type": "object"
+    },
+    "TextTemplateResource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 32000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "isViewedAsPlainText": {
+          "default": true,
+          "title": "Isviewedasplaintext",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "text"
+      ],
+      "title": "TextTemplateResource",
+      "type": "object"
+    },
+    "UpdateRecord": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "UpdateRecordById",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Name",
+          "type": "string"
+        },
+        "label": {
+          "maxLength": 255,
+          "minLength": 1,
+          "title": "Label",
+          "type": "string"
+        },
+        "object": {
+          "maxLength": 80,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Object",
+          "type": "string"
+        },
+        "recordId": {
+          "$ref": "#/$defs/FlowRecordReference"
+        },
+        "inputAssignments": {
+          "items": {
+            "$ref": "#/$defs/FlowInputAssignment"
+          },
+          "maxItems": 50,
+          "minItems": 1,
+          "title": "Inputassignments",
+          "type": "array"
+        },
+        "next": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Next"
+        },
+        "faultNext": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Faultnext"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "label",
+        "object",
+        "recordId",
+        "inputAssignments",
+        "next"
+      ],
+      "title": "UpdateRecord",
+      "type": "object"
+    }
+  },
+  "anyOf": [
+    {
+      "$ref": "#/$defs/FlowConfig"
+    },
+    {
+      "$ref": "#/$defs/ExtendedFlowConfig"
+    }
+  ]
+}

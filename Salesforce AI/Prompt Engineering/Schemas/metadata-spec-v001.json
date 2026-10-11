@@ -1,95 +1,112 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Salesforce AI Metadata Specification",
-  "description": "Structured metadata specification produced from an approved Salesforce implementation plan.",
+  "title": "MetadataSpecification",
+  "description": "Complete metadata specification generated from an approved implementation plan.",
   "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "planId",
-    "metadata",
-    "validationIssues"
-  ],
   "properties": {
     "planId": {
-      "type": "string",
-      "minLength": 1
+      "minLength": 1,
+      "title": "Planid",
+      "type": "string"
     },
     "metadata": {
-      "type": "array",
       "items": {
-        "$ref": "#/$defs/metadataItem"
-      }
+        "$ref": "#/$defs/MetadataItem"
+      },
+      "title": "Metadata",
+      "type": "array"
     },
     "validationIssues": {
-      "type": "array",
       "items": {
-        "$ref": "#/$defs/validationIssue"
-      }
+        "$ref": "#/$defs/MetadataValidationIssue"
+      },
+      "title": "Validationissues",
+      "type": "array"
     }
   },
+  "required": [
+    "planId"
+  ],
   "$defs": {
-    "metadataItem": {
+    "MetadataItem": {
+      "description": "One Salesforce metadata component passed to the deterministic metadata generation layer. Supports CREATE for CustomObject, CustomField, ValidationRule, and Flow within the before-save v1 subset. Other component types remain unsupported until their generation pipelines are implemented.",
+      "title": "MetadataItem",
       "type": "object",
-      "additionalProperties": false,
+      "properties": {
+        "itemId": {
+          "minLength": 1,
+          "title": "Itemid",
+          "type": "string"
+        },
+        "action": {
+          "const": "CREATE",
+          "title": "Action",
+          "type": "string"
+        },
+        "metadataType": {
+          "enum": [
+            "CustomObject",
+            "CustomField",
+            "ValidationRule",
+            "Flow"
+          ],
+          "title": "Metadatatype",
+          "type": "string"
+        },
+        "fullName": {
+          "minLength": 1,
+          "title": "Fullname",
+          "type": "string"
+        },
+        "label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Label"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "dependencies": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Dependencies",
+          "type": "array"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        }
+      },
       "required": [
         "itemId",
         "action",
         "metadataType",
-        "fullName",
-        "dependencies",
-        "config"
+        "fullName"
       ],
-      "properties": {
-        "itemId": {
-          "type": "string",
-          "minLength": 1
-        },
-        "action": {
-          "type": "string",
-          "enum": [
-            "CREATE"
-          ]
-        },
-        "metadataType": {
-          "type": "string",
-          "enum": [
-            "CustomObject",
-            "CustomField"
-          ]
-        },
-        "fullName": {
-          "type": "string",
-          "minLength": 1
-        },
-        "label": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "dependencies": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "uniqueItems": true
-        },
-        "config": {
-          "type": "object"
-        }
-      },
       "allOf": [
         {
           "if": {
             "properties": {
               "metadataType": {
-                "const": "CustomObject"
+                "const": "Flow"
               }
             },
             "required": [
@@ -97,132 +114,42 @@
             ]
           },
           "then": {
-            "properties": {
-              "config": {
-                "$ref": "#/$defs/customObjectConfig"
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "properties": {
-              "metadataType": {
-                "const": "CustomField"
-              }
-            },
             "required": [
-              "metadataType"
-            ]
-          },
-          "then": {
+              "config",
+              "label"
+            ],
             "properties": {
+              "label": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 255
+              },
               "config": {
-                "$ref": "#/$defs/customFieldConfig"
+                "$ref": "flow-config-v001.json"
               }
             }
           }
         }
       ]
     },
-
-    "customObjectConfig": {
+    "MetadataValidationIssue": {
+      "description": "Represents an issue discovered while converting an approved plan into metadata specifications.",
+      "title": "MetadataValidationIssue",
       "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "pluralLabel": {
-          "type": "string"
-        },
-        "nameFieldLabel": {
-          "type": "string"
-        },
-        "nameFieldType": {
-          "type": "string",
-          "enum": [
-            "Text"
-          ]
-        },
-        "deploymentStatus": {
-          "type": "string",
-          "enum": [
-            "Deployed"
-          ]
-        },
-        "sharingModel": {
-          "type": "string",
-          "enum": [
-            "Read"
-          ]
-        }
-      }
-    },
-
-    "customFieldConfig": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "type"
-      ],
-      "properties": {
-        "type": {
-          "type": "string",
-          "enum": [
-            "Text",
-            "Email",
-            "Date",
-            "Picklist"
-          ]
-        },
-        "required": {
-          "type": "boolean"
-        },
-        "values": {
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1
-          },
-          "minItems": 1,
-          "uniqueItems": true
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "type": {
-                "const": "Picklist"
-              }
-            },
-            "required": [
-              "type"
-            ]
-          },
-          "then": {
-            "required": [
-              "values"
-            ]
-          }
-        }
-      ]
-    },
-
-    "validationIssue": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "code",
-        "message"
-      ],
       "properties": {
         "itemId": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Itemid"
         },
         "code": {
-          "type": "string",
           "enum": [
             "PLAN_NOT_APPROVED",
             "ITEM_NOT_APPROVED",
@@ -232,13 +159,20 @@
             "MISSING_CONFIGURATION",
             "INVALID_FULL_NAME",
             "UNRESOLVED_DEPENDENCY"
-          ]
+          ],
+          "title": "Code",
+          "type": "string"
         },
         "message": {
-          "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "title": "Message",
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
     }
   }
 }

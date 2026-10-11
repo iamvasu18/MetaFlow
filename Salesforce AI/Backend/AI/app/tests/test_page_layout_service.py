@@ -49,7 +49,7 @@ class PageLayoutTests(unittest.TestCase):
         self.spec = Obj(metadata=[self.item])
         write_xml(field(), self.root / component_path('CustomField', self.item.fullName))
 
-    def retrieve_fixture(self, directory):
+    def retrieve_fixture(self, directory, objects=None):
         write_xml(layout('Account Information'), directory / layout_path('Account-Account Layout'))
         return profile(), {'Account-Account Layout', 'Contact-Contact Layout'}
 
@@ -135,7 +135,19 @@ class PageLayoutTests(unittest.TestCase):
         generated = ET.parse(self.root / result['generatedFiles'][0]).getroot()
         self.assertEqual(next(generated.iter(Q('behavior'))).text, 'Readonly')
         overlay = ET.parse(self.root / PROFILE_PATH).getroot()
-        self.assertIn('Training__c-Training__c Layout', [n.text for n in overlay.iter(Q('layout'))])
+        self.assertIn('Training__c-Training Layout', [n.text for n in overlay.iter(Q('layout'))])
+
+    def test_population_layout_name_matches_profile_and_file(self):
+        item = Obj(action='CREATE', metadataType='CustomObject', fullName='Population__c')
+        write_xml(xml('CustomObject', '<nameField><type>Text</type></nameField>'), self.root / component_path('CustomObject', item.fullName))
+        with patch.object(PageLayoutService, '_retrieve', return_value=(profile(), set())):
+            result = PageLayoutService(self.root).generate(Obj(metadata=[item]))
+        expected = 'Population__c-Population Layout'
+        self.assertEqual(result['layouts'][0]['fullName'], expected)
+        self.assertTrue((self.root / layout_path(expected)).is_file())
+        overlay = ET.parse(self.root / PROFILE_PATH).getroot()
+        self.assertIn(expected, [n.text for n in overlay.iter(Q('layout'))])
+        self.assertNotIn('__', expected.partition('-')[2])
 
     def test_validation_rule_only_does_not_retrieve(self):
         with patch.object(PageLayoutService, '_retrieve') as retrieve:

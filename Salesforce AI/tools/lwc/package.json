@@ -1,0 +1,18 @@
+{
+  "dependencies": {
+    "@babel/eslint-parser": "7.29.9",
+    "@babel/parser": "8.0.7",
+    "@babel/plugin-syntax-decorators": "7.29.7",
+    "@babel/traverse": "8.0.7",
+    "@lwc/compiler": "9.4.3",
+    "@lwc/eslint-plugin-lwc": "3.5.0",
+    "@salesforce/eslint-plugin-lightning": "2.0.0",
+    "eslint": "9.39.5"
+  },
+  "name": "salesforce-ai-lwc-checker",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.11.0 <25"
+  }
+}

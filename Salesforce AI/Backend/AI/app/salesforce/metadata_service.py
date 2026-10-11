@@ -3,12 +3,15 @@ import os
 import re
 import shutil
 import subprocess
+import logging
+from time import perf_counter
+from concurrent.futures import ThreadPoolExecutor
 
 
 class SalesforceMetadataService:
     """
     Retrieves Salesforce object, field, relationship,
-    and picklist metadata using Salesforce CLI.
+    and picklist metadata using owned APIs (legacy CLI for standalone tooling).
     """
 
     def __init__(
@@ -16,12 +19,30 @@ class SalesforceMetadataService:
         target_org: str,
     ):
         self.target_org = target_org
+        from Backend.AI.app.account_api import current_account
+        from Backend.AI.app.services.salesforce_api_client import SalesforceApiClient
+        from Backend.AI.app.services.flow_generator import api_version
+        from pathlib import Path
+        owner=current_account.get()
+        self.api=SalesforceApiClient(owner,target_org,api_version(Path.cwd())) if owner else None
 
     # =====================================================
     # Salesforce CLI
     # =====================================================
 
-    def _run_sf_command(
+    def _run_sf_command(self, command):
+        started = perf_counter()
+        try:
+            return self._execute_sf_command(command)
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError('Salesforce metadata read exceeded 120 seconds. Check org connectivity and retry.') from exc
+        finally:
+            logging.getLogger(__name__).info(
+                'Salesforce discovery command=%s seconds=%.3f',
+                ' '.join(command[1:4]), perf_counter() - started,
+            )
+
+    def _execute_sf_command(
         self,
         command: list[str],
     ) -> dict:
@@ -71,6 +92,7 @@ class SalesforceMetadataService:
             encoding="utf-8",
             errors="replace",
             check=False,
+            timeout=120,
         )
 
         stdout = (
@@ -208,6 +230,12 @@ class SalesforceMetadataService:
         Retrieve Salesforce objects available in the org.
         """
 
+        from Backend.AI.app.services.planning_performance import planning_cache
+        owner = getattr(self, '_cache_owner', None)
+        key = (owner, self.target_org, 'object-catalog')
+        cached, epoch = planning_cache.get(key) if owner else (None, None)
+        if cached is not None:
+            return cached['objects']
         command = [
             "sf",
             "sobject",
@@ -217,7 +245,7 @@ class SalesforceMetadataService:
             "--json",
         ]
 
-        data = self._run_sf_command(command)
+        data = {"result":self.api.list_objects()} if self.api else self._run_sf_command(command)
 
         result = data.get(
             "result",
@@ -253,6 +281,8 @@ class SalesforceMetadataService:
                     }
                 )
 
+        if owner:
+            planning_cache.put(key, {'objects': objects}, epoch)
         return objects
 
     # =====================================================
@@ -553,6 +583,9 @@ class SalesforceMetadataService:
 
         object_name = object_name.strip()
 
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*',object_name):
+            raise ValueError('Invalid Salesforce object API name.')
+
         if not object_name:
             raise ValueError(
                 "Salesforce object name cannot be empty."
@@ -584,9 +617,7 @@ class SalesforceMetadataService:
             "--json",
         ]
 
-        data = self._run_sf_command(
-            command
-        )
+        data = {"result":self.api.query(query,tooling=True)} if self.api else self._run_sf_command(command)
 
         result = data.get(
             "result",
@@ -663,7 +694,19 @@ class SalesforceMetadataService:
     # Object Describe
     # =====================================================
 
-    def describe_object(
+    def describe_object(self, object_name):
+        from Backend.AI.app.services.planning_performance import planning_cache
+        owner = getattr(self, '_cache_owner', None)
+        key = (owner, self.target_org, ('object-describe', str(object_name).strip()))
+        cached, epoch = planning_cache.get(key) if owner else (None, None)
+        if cached is not None:
+            return cached
+        result = self._describe_object_uncached(object_name)
+        if owner:
+            planning_cache.put(key, result, epoch)
+        return result
+
+    def _describe_object_uncached(
         self,
         object_name: str,
     ) -> dict:
@@ -709,9 +752,11 @@ class SalesforceMetadataService:
             "--json",
         ]
 
-        data = self._run_sf_command(
-            command
-        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            describe_future = executor.submit(lambda: {"result":self.api.describe_object(object_name)} if self.api else self._run_sf_command(command))
+            definitions_future = executor.submit(self.get_field_definitions, object_name)
+            data = describe_future.result()
+            metadata_fields = definitions_future.result()
 
         result = data.get(
             "result",
@@ -771,6 +816,14 @@ class SalesforceMetadataService:
                     is False
                 ),
             }
+
+            # Preserve formula expressions, types and write constraints for Flow planning.
+            for key in ('calculated', 'calculatedFormula', 'scale', 'precision',
+                        'autoNumber', 'createable', 'updateable', 'nillable',
+                        'defaultedOnCreate', 'filterable', 'sortable', 'length',
+                        'restrictedPicklist', 'picklistValues'):
+                if key in field:
+                    field_data[key] = field[key]
 
             # ---------------------------------------------
             # Picklist Values
@@ -859,11 +912,6 @@ class SalesforceMetadataService:
         # FieldDefinition Metadata
         # -------------------------------------------------
 
-        metadata_fields = (
-            self.get_field_definitions(
-                object_name
-            )
-        )
 
         # Existing fields returned by runtime describe.
         existing_fields_by_name = {
@@ -962,6 +1010,7 @@ class SalesforceMetadataService:
             ),
 
             "fields": fields,
+            **{key:result[key] for key in ("queryable","createable","updateable","deletable") if key in result},
 
             "relationships": relationships,
         }
@@ -987,34 +1036,12 @@ class SalesforceMetadataService:
                 "as a list."
             )
 
-        object_details = []
-        seen_objects = set()
-
-        for object_name in objects:
-
-            if not isinstance(
-                object_name,
-                str,
-            ):
-                continue
-
-            object_name = object_name.strip()
-
-            if not object_name:
-                continue
-
-            if object_name in seen_objects:
-                continue
-
-            seen_objects.add(
-                object_name
-            )
-
-            object_details.append(
-                self.describe_object(
-                    object_name
-                )
-            )
+        names = list(dict.fromkeys(
+            name.strip() for name in objects if isinstance(name, str) and name.strip()
+        ))
+        # Independent read-only describes; bounded fan-out and stable input order.
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            object_details = list(executor.map(self.describe_object, names))
 
         return {
             "objects": object_details
@@ -1046,3 +1073,37 @@ class SalesforceMetadataService:
         return self.get_context(
             object_names
         )
+
+    def get_org_timezone(self):
+        query='SELECT TimeZoneSidKey FROM Organization LIMIT 1'
+        result = self.api.query(query) if self.api else self._run_sf_command([
+            'sf', 'data', 'query', '--query', query,
+            '--target-org', self.target_org, '--json',
+        ]).get('result', {})
+        records = result.get('records', []) if isinstance(result, dict) else []
+        value = records[0].get('TimeZoneSidKey') if records else None
+        if not isinstance(value, str) or not value:
+            raise ValueError('Unable to discover the Salesforce org time zone for schedule planning.')
+        return value
+
+    def get_flow_dependency_context(self, requirement: str) -> dict:
+        """Read action/subflow catalogs only when the requirement needs them.
+
+        GET requests describe actions; this never invokes an Apex action or Flow.
+        The target org's compile validation remains authoritative at deployment.
+        """
+        from Backend.AI.app.services.flow_generator import api_version
+        from pathlib import Path
+        version=api_version(Path.cwd())
+        routes=[]
+        if re.search(r'\bapex\s+(?:invocable\s+)?action\b|\binvocable\s+apex\b',requirement,re.I): routes.append('custom/apex')
+        if re.search(r'\bemail\s+alert\b',requirement,re.I): routes.append('custom/emailAlert')
+        elif re.search(r'\b(send|sending)\s+(an?\s+)?email\b',requirement,re.I): routes.append('standard/emailSimple')
+        if re.search(r'\bsubflow\b|\bcall\b.*\bflow\b',requirement,re.I): routes.append('custom/flow')
+        catalogs={}
+        for route in routes:
+            result={'result':self.api.get(self.api.base+'/actions/'+route)} if self.api else self._run_sf_command(['sf','api','request','rest',f'/services/data/v{version}/actions/{route}','--method','GET','--target-org',self.target_org])
+            payload=result.get('result',result) if isinstance(result,dict) else result
+            if not isinstance(payload,(dict,list)):raise RuntimeError('Salesforce action discovery returned an unexpected response.')
+            catalogs[route]=payload
+        return {'flowDependencies':catalogs} if catalogs else {}

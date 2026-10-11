@@ -6,9 +6,13 @@ import {
   LogOut,
   ChevronDown,
 } from "lucide-react";
-import { NavLink, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
+
+import { useAuth } from "../../context/AuthContext";
 
 function UserMenu() {
+  const {user,signOut}=useAuth();
+  const [error,setError]=useState("");
   const [open, setOpen] = useState(false);
   const navigate = useNavigate();
 
@@ -19,25 +23,23 @@ function UserMenu() {
 
   const handleProfile = () => {
     setOpen(false);
-    // Profile page can be implemented later
-    navigate("/settings");
+    navigate("/profile");
   };
 
   const handleOrganization = () => {
     setOpen(false);
-    navigate("/admin");
+    navigate("/settings");
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
     setOpen(false);
 
-    // Logout functionality can be connected
-    // to the backend/auth system later.
-    console.log("Logout clicked");
+    try { await signOut(); navigate("/login"); } catch(e) {setError(e.message); }
   };
 
   return (
     <div className="relative">
+      {error&&<p role="alert">{error}</p>}
 
       {/* ================================================= */}
       {/* PROFILE BUTTON */}
@@ -54,7 +56,7 @@ function UserMenu() {
         {/* Avatar */}
 
         <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 text-[11px] font-semibold text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-          PN
+          {user?.name?.slice(0,2).toUpperCase()}
         </div>
 
         {/* User name */}
@@ -62,7 +64,7 @@ function UserMenu() {
         <div className="hidden text-left lg:block">
 
           <p className="text-[11px] font-semibold leading-none text-slate-800 dark:text-zinc-200">
-            Priya Nair
+            {user?.name}
           </p>
 
           <p className="mt-1 text-[9px] leading-none text-slate-400 dark:text-zinc-600">
@@ -111,17 +113,17 @@ function UserMenu() {
               <div className="flex items-center gap-3">
 
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-xs font-semibold text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                  PN
+                  {user?.name?.slice(0,2).toUpperCase()}
                 </div>
 
                 <div className="min-w-0">
 
                   <p className="truncate text-sm font-semibold text-slate-900 dark:text-white">
-                    Priya Nair
+                    {user?.name}
                   </p>
 
                   <p className="mt-0.5 truncate text-[10px] text-slate-500 dark:text-zinc-500">
-                    priya@acmecorp.com
+                    {user?.email}
                   </p>
 
                 </div>

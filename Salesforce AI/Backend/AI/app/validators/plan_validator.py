@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from Backend.AI.app.services.custom_object_policy import custom_object_config_errors
 
 from pydantic import (
     BaseModel,
@@ -928,6 +929,13 @@ def _validate_validation_rule(
                 "errorConditionFormula"
             )
 
+        if _non_empty_string(formula):
+            from Backend.AI.app.validators.metadata_spec_validator import validate_formula_regex_escaping
+            try:
+                validate_formula_regex_escaping(formula)
+            except ValueError as exc:
+                errors.append(f"{item.id}: {exc}")
+
         message = config.get(
             "errorMessage"
         )
@@ -966,61 +974,17 @@ def _validate_validation_rule(
 # Flow Validation
 # =========================================================
 
-def _validate_flow(
-    item: PlanItem,
-    errors: list[str],
-    warnings: list[str],
-) -> None:
-
-    if item.action in {
-        "NO_CHANGE",
-        "DELETE",
-    }:
+def _validate_flow(item: PlanItem, errors: list[str], warnings: list[str]) -> None:
+    if item.action == "NO_CHANGE":
         return
-
-    if not isinstance(
-        item.config,
-        dict,
-    ):
-        errors.append(
-            f"{item.id}: Flow requires a config object"
-        )
+    if item.action != "CREATE":
+        errors.append(f"{item.id}: Flow v1 only supports CREATE.")
         return
-
-    if item.action == "CREATE":
-
-        flow_type = item.config.get(
-            "flowType"
-        )
-
-        if not _non_empty_string(
-            flow_type
-        ):
-            errors.append(
-                f"{item.id}: Flow requires flowType"
-            )
-
-        elif not (
-            SalesforceCapabilityRegistry
-            .is_valid_flow_type(
-                flow_type
-            )
-        ):
-            errors.append(
-                f"{item.id}: unsupported flowType "
-                f"'{flow_type}'"
-            )
-
-    if not (
-        SalesforceCapabilityRegistry
-        .is_executable_metadata_type(
-            "Flow"
-        )
-    ):
-        warnings.append(
-            f"{item.id}: Flow is known but its complete "
-            "generation pipeline is not enabled yet"
-        )
+    from Backend.AI.app.validators.flow_validator import validate_flow
+    try:
+        validate_flow(item.fullName, item.label, item.config)
+    except ValueError as exc:
+        errors.append(f"{item.id}: Invalid Flow configuration: {exc}")
 
 
 # =========================================================
@@ -1072,17 +1036,13 @@ def _validate_apex_class(
                 f"'{apex_kind}'"
             )
 
-    if not (
-        SalesforceCapabilityRegistry
-        .is_executable_metadata_type(
-            "ApexClass"
-        )
-    ):
-        warnings.append(
-            f"{item.id}: ApexClass is known but code "
-            "generation is not enabled yet"
-        )
-
+        if "body" in item.config and (
+            not isinstance(item.config.get("body"), str)
+            or not item.config.get("body", "").strip()
+        ):
+            errors.append(
+                f"{item.id}: ApexClass config.body must be a non-empty string when supplied"
+            )
 
 # =========================================================
 # Apex Trigger Validation
@@ -1142,17 +1102,13 @@ def _validate_apex_trigger(
                 errors=errors,
             )
 
-    if not (
-        SalesforceCapabilityRegistry
-        .is_executable_metadata_type(
-            "ApexTrigger"
-        )
-    ):
-        warnings.append(
-            f"{item.id}: ApexTrigger is known but code "
-            "generation is not enabled yet"
-        )
-
+        if "body" in item.config and (
+            not isinstance(item.config.get("body"), str)
+            or not item.config.get("body", "").strip()
+        ):
+            errors.append(
+                f"{item.id}: ApexTrigger config.body must be a non-empty string when supplied"
+            )
 
 # =========================================================
 # Lightning Web Component Validation
@@ -1224,7 +1180,11 @@ def _validate_metadata_item_config(
     warnings: list[str],
 ) -> None:
 
-    if item.metadataType == "CustomField":
+    if item.metadataType == "CustomObject":
+        if item.action == "CREATE":
+            errors.extend(f"{item.id}: {message}" for message in custom_object_config_errors(item.config))
+
+    elif item.metadataType == "CustomField":
 
         _validate_custom_field(
             item,
@@ -1448,6 +1408,13 @@ def validate_plan(
             errors.append(
                 f"{item.id}: fullName cannot be empty"
             )
+
+        if item.metadataType in {"CustomObject", "CustomField", "ValidationRule", "Flow", "ApexClass", "ApexTrigger", "LightningComponentBundle"}:
+            from Backend.AI.app.services.metadata_safety import validate_component_name
+            try:
+                validate_component_name(item.metadataType, item.fullName)
+            except ValueError as exc:
+                errors.append(f"{item.id}: {exc}")
 
         # -------------------------------------------------
         # Dependencies
