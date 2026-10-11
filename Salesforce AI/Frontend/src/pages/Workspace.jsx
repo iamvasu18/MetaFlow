@@ -1,1460 +1,530 @@
-import {
-  AlertCircle,
-  ArrowLeft,
-  Bot,
-  Check,
-  ChevronRight,
-  CirclePlus,
-  Code2,
-  Database,
-  Download,
-  ExternalLink,
-  FileCode2,
-  FileText,
-  FolderGit2,
-  History,
-  ListTodo,
-  MessageSquare,
-  MoreHorizontal,
-  Paperclip,
-  RefreshCw,
-  Send,
-  Sparkles,
-  Upload,
-  X,
-  GitBranch,
-} from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
+import { Bot, Cloud, Code2, FileText, MessageSquare, Plus, Send, Settings2, Sun, Moon, ShieldCheck, Upload, Pencil, Wrench, Menu, X, Ticket, Sparkles } from 'lucide-react';
+import './Workspace.css';
+import { useTheme } from '../context/ThemeContext';
+import { useOrg } from '../context/OrgContext';
+import { apiRequest } from '../services/workspaceApi';
+import { waitForBackgroundJob } from '../services/backgroundJobs';
+import { componentErrors } from '../services/componentPresentation';
+import { canDeploy, statusText, statusLabel, conversationRequirement } from '../services/workspaceState';
 
-import { useEffect, useRef, useState } from "react";
-import dashboardData from "../data/dashboardData";
+const RECOVERY_KEY = 'salesforce_plan_workspace_v2';
+const GENERATION_JOB_KEY = 'salesforce_generation_job_v1';
+const buttonClass = 'ws-button';
+function readRecovery() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECOVERY_KEY));
+    return value && value.kind === 'default' && typeof value.id === 'string' ? value : null;
+  } catch { return null; }
+}
 
-const CHAT_STORAGE_KEY = "apexai_workspace_chats";
-
-const DEFAULT_CHATS = [
-  {
-    id: "demo-1",
-    title: "Implement appointment validation",
-    preview: "Create validation rules for appointment scheduling...",
-    createdAt: "Today",
-    messages: [],
-  },
-  {
-    id: "demo-2",
-    title: "Objectives Automate opportunity",
-    preview: "Automate opportunity objectives and approval...",
-    createdAt: "Yesterday",
-    messages: [],
-  },
-  {
-    id: "demo-3",
-    title: "Build an Apex class for a Healthcare",
-    preview: "Create an Apex service for healthcare records...",
-    createdAt: "2 days ago",
-    messages: [],
-  },
-  {
-    id: "demo-4",
-    title: "Establish the Salesforce data foundation",
-    preview: "Design the Salesforce data model...",
-    createdAt: "3 days ago",
-    messages: [],
-  },
-  {
-    id: "demo-5",
-    title: "Review Salesforce configuration",
-    preview: "Review the Salesforce configuration...",
-    createdAt: "4 days ago",
-    messages: [],
-  },
-];
-
-function Workspace() {
-  const data = dashboardData;
-
-  const fileInputRef = useRef(null);
-  const planInputRef = useRef(null);
-
-  const [activeTab, setActiveTab] = useState("chat");
-
-  const [chats, setChats] = useState(() => {
-    try {
-      const saved = localStorage.getItem(CHAT_STORAGE_KEY);
-      return saved ? JSON.parse(saved) : DEFAULT_CHATS;
-    } catch {
-      return DEFAULT_CHATS;
-    }
-  });
-
-  const [activeChatId, setActiveChatId] = useState(null);
-  const [requirement, setRequirement] = useState("");
+export default function Workspace() {
+  const { activeOrg, organizations, selectOrganization } = useOrg();
+  const location = useLocation();
+  const kind = 'default';
+  const { theme, toggleTheme } = useTheme();
+  const [requirement, setRequirement] = useState(() => location.state?.requirement || '');
+  const [bundle, setBundle] = useState(null);
+  const [queuedGeneration, setQueuedGeneration] = useState(null);
+  const [jobProgress, setJobProgress] = useState(null);
+  const [approvedHash, setApprovedHash] = useState('');
+  const [repairTicket, setRepairTicket] = useState('');
+  const [clarification, setClarification] = useState(null);
+  const [inputMessage, setInputMessage] = useState(() => location.state?.requirement || '');
+  const [conversationId, setConversationId] = useState(null);
+  const [conversationOrg, setConversationOrg] = useState('');
+  const visibleConversation = useRef(null);
+  visibleConversation.current = conversationId;
   const [messages, setMessages] = useState([]);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const [attachment, setAttachment] = useState(null);
-  const [planUploaded, setPlanUploaded] = useState(null);
-
-  const [showGitModal, setShowGitModal] = useState(false);
-  const [gitUrl, setGitUrl] = useState("");
-
+  const [archivedPlan, setArchivedPlan] = useState(null);
+  const composerRef = useRef(null);
+  const sending = useRef(false);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+  const [recovery, setRecovery] = useState(() => location.state?.restorePlan || readRecovery());
+  const operationLock = useRef(false);
+  const uploadRef = useRef(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [tab, setTab] = useState('chat');
+  const [layoutChoices,setLayoutChoices]=useState([]);
+  const [layoutDirty,setLayoutDirty]=useState(false);
+  const [confirmDeploy,setConfirmDeploy]=useState(false);
+  const [chats, setChats] = useState([]);
+  const [historyError, setHistoryError] = useState('');
+  const [sourceEditor, setSourceEditor] = useState(null);
+  const [repairEditor, setRepairEditor] = useState(null);
+  const [information, setInformation] = useState('');
+  const [repairInstruction, setRepairInstruction] = useState('');
+  const [activeComponent, setActiveComponent] = useState('');
+  const [approving, setApproving] = useState(false);
+  const [editRequest, setEditRequest] = useState(null);
+  const [editText, setEditText] = useState('');
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [jiraStories, setJiraStories] = useState([]);
+  const [jiraLoading, setJiraLoading] = useState(false);
+  const [jiraError, setJiraError] = useState('');
+  const [selectedComponents, setSelectedComponents] = useState([]);
+  const org = activeOrg?.id || '';
+  const generationInThisChat = Boolean(queuedGeneration && queuedGeneration.targetOrg === org && queuedGeneration.conversationId === conversationId);
+  const sameOrg = !bundle || bundle.targetOrg === org;
+  const selectedOrg = organizations.find(item => item.id === (bundle?.targetOrg || org)) || activeOrg;
+  const orgName = selectedOrg && !/^00D[A-Za-z0-9]+$/.test(selectedOrg.name || '') ? selectedOrg.name : selectedOrg?.username || 'Salesforce org';
+  const canRevise = bundle && !['queued', 'running', 'pending', 'unknown', 'deployed', 'rejected'].includes(bundle.state);
+  const canRepair = canRevise && (bundle.state === 'failed' || Boolean(bundle.error));
+  const acceptBundle = useCallback((value, implementationKind = kind, threadId = conversationId) => {
+    if (!value?.id || !value.sourceHash || !value.files || !value.targetOrg) {
+      throw new Error('Backend returned an incomplete package.');
+    }
+    setInformation('');
+    setArchivedPlan(null);
+    setSourceEditor(null);
+    setConfirmDeploy(false);
+    setClarification(null); setRepairTicket('');
+    setBundle(value);
+    setSelectedComponents((value.components || []).map(item => `${item.metadataType}:${item.fullName}`));
+    setLayoutChoices(value.layoutOptions?.selections || []);
+    setLayoutDirty(false);
+    setRequirement(value.requirement || '');
+    setApprovedHash(value.approvedHash || '');
+    const saved = { kind: implementationKind, id: value.id, targetOrg: value.targetOrg, requirement: value.requirement };
+    if (!threadId) setChats(previous => [saved, ...previous.filter(chat => chat.id !== value.id)].slice(0, 50));
+    setEditRequest(null);
+    setRecovery(saved);
+    try { localStorage.setItem(RECOVERY_KEY, JSON.stringify(saved)); } catch { /* Storage may be disabled. */ }
+  }, [conversationId, kind]);
+  useEffect(() => {
+    let alive = true;
+    if (!org) return;
+    Promise.all([apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations`), apiRequest('default', `/orgs/${encodeURIComponent(org)}/chats`)]).then(([threads, rows]) => { if (alive) { setChats([...threads, ...rows]); setHistoryError(''); } }).catch(failure => { if (alive) setHistoryError(failure.message); });
+    return () => { alive = false; };
+  }, [org]);
+  useEffect(() => {
+    if (!['queued', 'running', 'pending'].includes(bundle?.state) || !sameOrg) return;
+    let alive = true;
+    let timer;
+    const id = bundle.id;
+    async function poll() {
+      if (!alive) return;
+      if (operationLock.current) { timer = setTimeout(poll, 2000); return; }
+      operationLock.current = true;
+      try {
+        const status = await apiRequest('default', `/plans/${encodeURIComponent(id)}/status`);
+        if (alive) {
+          setError('');
+          setBundle(previous => previous?.id === id ? { ...previous, ...status } : previous);
+        }
+        if (!['queued', 'running', 'pending'].includes(status.state)) {
+          const value = await apiRequest('default', `/plans/${encodeURIComponent(id)}`);
+          if (alive) acceptBundle(value);
+        } else if (alive) {
+          timer = setTimeout(poll, 2000);
+        }
+      } catch (failure) {
+        if (alive) {
+          setError(`Status check failed: ${failure.message}. Tracking will resume when the backend is available.`);
+          if (!failure.status || failure.status >= 500) timer = setTimeout(poll, 3000);
+        }
+      } finally { operationLock.current = false; }
+    }
+    timer = setTimeout(poll, 2000);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [bundle?.id, bundle?.jobId, bundle?.state, sameOrg, acceptBundle]);
 
   useEffect(() => {
-    localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chats));
-  }, [chats]);
-
-  /*
-   * =========================================================
-   * NEW CHAT
-   * =========================================================
-   */
-
-  const handleNewChat = () => {
-    const id = `chat-${Date.now()}`;
-
-    const newChat = {
-      id,
-      title: "New Salesforce requirement",
-      preview: "Start a new AI workspace conversation...",
-      createdAt: "Just now",
-      messages: [],
-    };
-
-    setChats((previous) => [newChat, ...previous]);
-
-    setActiveChatId(id);
-    setMessages([]);
-    setRequirement("");
-    setAttachment(null);
-    setPlanUploaded(null);
-    setJiraStories([]);
-    setActiveTab("chat");
-  };
-
-  /*
-   * =========================================================
-   * OPEN EXISTING CHAT
-   * =========================================================
-   */
-
-  const handleOpenChat = (chat) => {
-    setActiveChatId(chat.id);
-    setMessages(chat.messages || []);
-    setRequirement("");
-    setAttachment(null);
-    setPlanUploaded(null);
-    setJiraStories([]);
-    setActiveTab("chat");
-  };
-
-  /*
-   * =========================================================
-   * ATTACHMENT
-   * =========================================================
-   */
-
-  const handleAttachment = (event) => {
-    const file = event.target.files?.[0];
-
-    if (!file) return;
-
-    setAttachment({
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
-
-    event.target.value = "";
-  };
-
-  /*
-   * =========================================================
-   * UPLOAD PLAN
-   * =========================================================
-   */
-
-  const handleUploadPlan = (event) => {
-    const file = event.target.files?.[0];
-
-    if (!file) return;
-
-    setPlanUploaded({
-      name: file.name,
-      size: file.size,
-      type: file.type,
-    });
-
-    setRequirement(
-      `Review and implement the uploaded Salesforce implementation plan: ${file.name}`
-    );
-
-    event.target.value = "";
-  };
-
-  /*
-   * =========================================================
-   * IMPORT FROM GIT
-   * =========================================================
-   */
-
-  const handleImportGit = () => {
-    if (!gitUrl.trim()) return;
-
-    setRequirement(
-      `Review the Salesforce project imported from Git repository: ${gitUrl}`
-    );
-
-    setShowGitModal(false);
-    setGitUrl("");
-  };
-
-  /*
-   * =========================================================
-   * GENERATE AI RESPONSE
-   * =========================================================
-   */
-
-  const handleGenerate = () => {
-    if (!requirement.trim() && !attachment && !planUploaded) {
-      return;
-    }
-
-    setIsGenerating(true);
-
-    const userText =
-      requirement.trim() ||
-      (attachment
-        ? `Analyze the attached Salesforce file: ${attachment.name}`
-        : `Analyze uploaded plan: ${planUploaded.name}`);
-
-    const userMessage = {
-      id: Date.now(),
-      role: "user",
-      content: userText,
-    };
-
-    setMessages((previous) => [...previous, userMessage]);
-
-    setTimeout(() => {
-      const aiMessage = {
-        id: Date.now() + 1,
-        role: "assistant",
-        content:
-          "I analyzed your Salesforce requirement. I recommend starting with the data model, followed by automation and then any Apex or Lightning Web Component development required.",
-        plan: true,
-      };
-
-      setMessages((previous) => [...previous, aiMessage]);
-
-      setIsGenerating(false);
-
-      createImplementationStories(userText);
-
-      saveCurrentChat(userText, [userMessage, aiMessage]);
-
-      setRequirement("");
-      setAttachment(null);
-      setPlanUploaded(null);
-    }, 1100);
-  };
-
-  /*
-   * =========================================================
-   * SAVE CHAT
-   * =========================================================
-   */
-
-  const saveCurrentChat = (title, newMessages) => {
-    const id = activeChatId || `chat-${Date.now()}`;
-
-    setActiveChatId(id);
-
-    setChats((previous) => {
-      const existing = previous.find((chat) => chat.id === id);
-
-      if (existing) {
-        return previous.map((chat) =>
-          chat.id === id
-            ? {
-                ...chat,
-                title:
-                  chat.title === "New Salesforce requirement"
-                    ? shortenTitle(title)
-                    : chat.title,
-                preview: title,
-                messages: [...(chat.messages || []), ...newMessages],
-              }
-            : chat
-        );
+    if (!org) return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(GENERATION_JOB_KEY));
+      if (saved?.backgroundJob && saved.targetOrg === org && saved.jobId) {
+        setConversationId(saved.conversationId); setConversationOrg(org);
+        setRequirement(saved.requirement || ''); setQueuedGeneration(saved); setJobProgress(saved);
       }
+    } catch { /* Ignore malformed local recovery data. */ }
+  }, [org]);
+  useEffect(() => {
+    if (!queuedGeneration || queuedGeneration.targetOrg !== org) return;
+    const controller = new AbortController();
+    const saved = queuedGeneration;
+    async function follow() {
+      try {
+        const result = await waitForBackgroundJob(saved, { signal: controller.signal, onProgress: value => { if (!controller.signal.aborted) setJobProgress(value); } });
+        if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) acceptBundle(result, 'default', saved.conversationId);
+      } catch (failure) {
+        if (controller.signal.aborted || visibleConversation.current !== saved.conversationId) return;
+        const question = failure.detail?.code === 'CLARIFICATION_REQUIRED' ? failure.detail : null;
+        setClarification(question); setRepairTicket(failure.detail?.repairTicket || '');
+        if (failure.detail?.code === 'NO_CHANGE_REQUIRED') { setInformation(failure.detail.message); setError(''); }
+        else setError(question ? '' : failure.message);
+      } finally {
+        if (!controller.signal.aborted) {
+          // The worker saved its reply with the terminal job state. Do not post
+          // another assistant message when this browser observes the result.
+          try {
+            if (saved.conversationId) {
+              const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(saved.conversationId)}`);
+              if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) setMessages(thread.messages);
+            }
+          } catch (failure) { if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) setHistoryError(failure.message); }
+          if (!controller.signal.aborted) {
+            try { localStorage.removeItem(GENERATION_JOB_KEY); } catch { /* Storage may be disabled. */ }
+            setQueuedGeneration(null); setJobProgress(null);
+          }
+        }
+      }
+    }
+    follow();
+    return () => controller.abort();
+  }, [queuedGeneration?.jobId, org, acceptBundle]);
 
-      return [
-        {
-          id,
-          title: shortenTitle(title),
-          preview: title,
-          createdAt: "Just now",
-          messages: newMessages,
-        },
-        ...previous,
-      ];
+  async function loadChat(chat, keepConversation = false) {
+    if (operationLock.current) return;
+    operationLock.current = true; setBusy('restore'); setError(''); setSidebarOpen(false);
+    try {
+      if (chat.kind === 'conversation') {
+        const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(chat.id)}`);
+        setConversationId(thread.id); setConversationOrg(thread.targetOrg); setMessages(thread.messages); setInputMessage('');
+        setBundle(null); setApprovedHash(''); setClarification(null); setInformation('');
+        const latest = thread.messages.at(-1);
+        const latestPlan = [...thread.messages].reverse().find(message => message.plan_id);
+        if (latestPlan && !['clarification', 'error', 'no_change'].includes(latest?.kind)) acceptBundle(await apiRequest('default', `/plans/${encodeURIComponent(latestPlan.plan_id)}`), kind, thread.id);
+        if (latest?.kind === 'clarification') { setRequirement(latest.context); setClarification({ question: latest.content }); }
+        else if (latest?.kind === 'no_change') { setInformation(latest.content); setRequirement(latest.context); }
+        else if (latest?.kind === 'error') { setError(latest.content); setRequirement(latest.context || ''); }
+      } else {
+        if (!keepConversation) { setConversationId(null); setConversationOrg(''); setMessages([]); setInputMessage(''); }
+        acceptBundle(await apiRequest('default', `/plans/${encodeURIComponent(chat.id)}`));
+      }
+    }
+    catch (failure) {
+      if (failure.status === 404 && chat.requirement) {
+        reset(); setRequirement(chat.requirement); setInputMessage(chat.requirement); setError('Your saved requirement is loaded. The previous package is unavailable on this backend; generate a new plan to continue.');
+      } else setError(failure.message);
+    } finally { operationLock.current = false; setBusy(''); }
+  }
+  function openSourceEditor(item) {
+    const base = 'force-app/main/default/';
+    const [object, member] = item.fullName.split('.');
+    const prefixes = { ApexClass: 'classes/', ApexTrigger: 'triggers/', Flow: 'flows/' };
+    const files = Object.fromEntries(Object.entries(bundle.files).filter(([path]) => {
+      if (item.metadataType === 'LightningComponentBundle') return path.startsWith(`${base}lwc/${item.fullName}/`);
+      if (prefixes[item.metadataType]) return path.startsWith(`${base}${prefixes[item.metadataType]}${item.fullName}.`);
+      if (item.metadataType === 'CustomObject') return path === `${base}objects/${object}/${object}.object-meta.xml`;
+      const directory = item.metadataType === 'CustomField' ? 'fields' : 'validationRules';
+      const suffix = item.metadataType === 'CustomField' ? 'field-meta.xml' : 'validationRule-meta.xml';
+      return path === `${base}objects/${object}/${directory}/${member}.${suffix}`;
+    }));
+    if (!Object.keys(files).length) { setError('No editable source is available for this component.'); return; }
+    setSourceEditor({ name: item.fullName, files, path: Object.keys(files)[0], hash: bundle.sourceHash });
+  }
+  function editPlan(componentName = '') {
+    setEditRequest(componentName || 'Entire plan');
+    setEditText(bundle.requirement + (componentName ? `\n\nRequested change to ${componentName}: ` : ''));
+  }
+  async function loadJira() {
+    setTab('jira'); setJiraLoading(true); setJiraError('');
+    try { setJiraStories(await apiRequest('default', '/integrations/jira/stories')); }
+    catch (failure) { setJiraError(failure.message); }
+    finally { setJiraLoading(false); }
+  }
+  const locked = Boolean(busy || queuedGeneration || ['queued', 'running', 'pending', 'unknown'].includes(bundle?.state) || !sameOrg || activeOrg?.status === 'Reconnect required');
+
+
+  async function viewSavedPlan(planId) {
+    if (operationLock.current) return;
+    operationLock.current = true; setBusy('view');
+    try { setArchivedPlan(await apiRequest('default', `/plans/${encodeURIComponent(planId)}`)); }
+    catch (failure) { setError(failure.message); }
+    finally { operationLock.current = false; setBusy(''); }
+  }
+  async function pushMessage(threadId, payload) {
+    const message = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(threadId)}/messages`, { method: 'POST', body: payload });
+    setMessages(previous => [...previous, message]);
+    return message;
+  }
+  async function reply(threadId, content, messageKind, context = '', planId = null) {
+    if (!threadId) return;
+    try { await pushMessage(threadId, { role: 'assistant', content, kind: messageKind, context, plan_id: planId }); }
+    catch (failure) { setHistoryError(`The operation completed, but its chat reply could not be saved: ${failure.message}`); }
+  }
+  async function sendMessage(text = inputMessage, fresh = false) {
+    if (operationLock.current || sending.current || locked || !org || !text.trim()) return;
+    if (/\b(?:named|called)\s*$/i.test(text)) { composerRef.current?.focus(); return; }
+    if (!fresh && conversationId && conversationOrg !== org) { setError('Start a new chat for the selected org.'); return; }
+    sending.current = true; setBusy('send');
+    try {
+      const nextRequirement = fresh ? text.trim() : conversationRequirement(requirement, text, clarification, bundle, { continuing: Boolean(conversationId), referenceOnly: Boolean(information) });
+      if (fresh) { reset(); setTab('chat'); setBusy('send'); }
+      let threadId = fresh ? null : conversationId;
+      if (!threadId) {
+        const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations`, { method: 'POST', body: { title: text.trim().slice(0, 300) } });
+        threadId = thread.id; setConversationId(threadId); setConversationOrg(org);
+        setChats(previous => [thread, ...previous]);
+        if (bundle && !fresh) await pushMessage(threadId, { role: 'assistant', content: `Previous implementation: ${bundle.plan?.summary || bundle.requirement}`, kind: 'plan', plan_id: bundle.id, context: bundle.requirement });
+      }
+      await pushMessage(threadId, { role: 'user', content: text.trim() });
+      setInputMessage(''); setRequirement(nextRequirement);
+      // Previous plans remain in saved chat history; they must not appear as
+      // the result of a new request that has failed or needs clarification.
+      setBundle(null); setApprovedHash(''); setConfirmDeploy(false);
+      setSourceEditor(null); setRepairEditor(null); setClarification(null);
+      await run(!fresh && clarification ? 'clarify' : 'generate', '', nextRequirement, '', threadId);
+    } catch (failure) { setError(failure.message); }
+    finally { sending.current = false; setBusy(''); }
+  }
+
+  async function run(action, componentName = '', answeredRequirement = '', repairNote = repairInstruction, threadId = conversationId) {
+    if (operationLock.current) return;
+    operationLock.current = true;
+    setBusy(action);
+    setInformation('');
+    setActiveComponent(componentName);
+    if (action === 'approve') setApproving(true);
+    setError('');
+    try {
+      if (action === 'generate' || action === 'fix-generation' || action === 'clarify') {
+        if (!(answeredRequirement || requirement).trim() || !org) {
+          setShowSettings(true);
+          throw new Error('Enter a requirement and select an org.');
+        }
+        setApprovedHash('');
+        const result = await apiRequest(kind, '/plan', { method: 'POST', token,
+          body: { requirement: answeredRequirement || requirement, target_org: org, generate_files: true, job_key: crypto.randomUUID(), conversation_id: threadId, ...(action === 'fix-generation' ? { repair_error: error, ...(repairTicket ? { repair_ticket: repairTicket } : {}) } : {}) } });
+        if (result.backgroundJob) {
+          const tracked = { ...result, conversationId: threadId, requirement: answeredRequirement || requirement };
+          try { localStorage.setItem(GENERATION_JOB_KEY, JSON.stringify(tracked)); } catch { /* Server remains authoritative. */ }
+          setJobProgress(result); setQueuedGeneration(tracked);
+          return;
+        }
+        acceptBundle(result, kind, threadId);
+        await reply(threadId, result.plan?.summary || 'A new implementation draft is ready for review.', 'plan', result.requirement, result.id);
+      } else if (action === 'activate-flow') {
+        const result=await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/activate-flow`, {method:'POST',body:{component_name:componentName,source_hash:bundle.sourceHash}});
+        acceptBundle(result);
+        const activation=result.flowActivations?.[componentName];
+        await reply(threadId,activation?.message || 'Flow activation status checked.','activation',result.requirement,result.id);
+      } else if (action === 'save-source') {
+        acceptBundle(await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/source`, { method: 'POST', body: { component_name: sourceEditor.name, source_hash: sourceEditor.hash, files: sourceEditor.files } }));
+        setSourceEditor(null);
+      } else if (action === 'repair' || action === 'revise') {
+        if (!sameOrg || !canRevise) throw new Error('Select the original org and check the saved operation before revising.');
+        if (action === 'repair' && !componentName && !canRepair) throw new Error('Select a component to repair.');
+        const body = action === 'repair' ? { component_name: componentName, instruction: repairNote, source_hash: bundle.sourceHash } : { requirement: editText };
+        const result = await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/${action}`, { method: 'POST', body });
+        acceptBundle(result);
+        await reply(threadId, action === 'repair' ? 'Component source repaired. Review the changes and approve again.' : 'A revised draft is ready for review.', 'plan', result.requirement, result.id);
+        setRepairEditor(null); setRepairInstruction('');
+        setTab('chat');
+      } else if (action === 'reject') {
+        await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/reject`, { method: 'POST', token });
+        await reply(threadId, 'Plan rejected. Nothing was deployed; you can continue in this chat.', 'plan', '', bundle.id);
+        setBundle(null); setApprovedHash(''); setRequirement(''); setClarification(null); setError('');
+        setRecovery(null);
+        try { localStorage.removeItem(RECOVERY_KEY); } catch { /* Storage may be disabled. */ }
+      } else if (action === 'restore') {
+        const value = await apiRequest(recovery.kind, `/plans/${encodeURIComponent(recovery.id)}`, { token });
+        setApprovedHash('');
+        acceptBundle(value, recovery.kind);
+      } else if (action === 'review-layouts') {
+        const path=`/plans/${encodeURIComponent(bundle.id)}`;
+        await apiRequest(kind,`${path}/layout-selections`,{method:'POST',token,body:{snapshotId:bundle.layoutOptions.snapshotId,selections:layoutChoices}});
+        acceptBundle(await apiRequest(kind,`${path}/generate-metadata`,{method:'POST',token}));
+      } else {
+        if (action === 'deploy' && !canDeploy(bundle, approvedHash)) throw new Error('Review and approve this package first.');
+        let reviewed = bundle;
+        if (action === 'approve' && selectionDirty) {
+          reviewed = await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/selection`, { method: 'POST', body: { source_hash: bundle.sourceHash, components: selectedComponents } });
+          acceptBundle(reviewed);
+          await reply(threadId, 'Selected components and dependencies are ready for review.', 'plan', reviewed.requirement, reviewed.id);
+          if (reviewed.selectionAddedDependencies?.length) {
+            setInformation(`Required dependencies retained: ${reviewed.selectionAddedDependencies.join(', ')}. Review the updated selection and approve again.`);
+            return;
+          }
+          if (!reviewed.layoutReady) throw new Error('Complete layout choices for the selected draft before approving.');
+        }
+        const path = `/plans/${encodeURIComponent(reviewed.id)}`;
+        const options = action === 'refresh' ? { token } : { method: 'POST', token,
+          ...(['deploy','approve'].includes(action) ? { body: { approved: true, source_hash: reviewed.sourceHash } } : {}) };
+        const result = await apiRequest(kind, action === 'refresh' ? path : `${path}/${action}`, options);
+        acceptBundle(result);
+        if (action === 'approve') {
+          setBusy('validate');
+          acceptBundle(await apiRequest(kind, `${path}/validate`, { method: 'POST', token }));
+        }
+      }
+    } catch (failure) {
+      if (failure.detail?.code === 'NO_CHANGE_REQUIRED') { setInformation(failure.detail.message); setClarification(null); setError(''); await reply(threadId, failure.detail.message, 'no_change', answeredRequirement || requirement); return; }
+      const question = failure.detail?.code === 'CLARIFICATION_REQUIRED' ? failure.detail : null;
+      setError(question ? '' : failure.message);
+      setRepairTicket(failure.detail?.repairTicket || '');
+      setClarification(question);
+      if (['generate', 'clarify', 'fix-generation'].includes(action)) await reply(threadId, question?.question || failure.message, question ? 'clarification' : 'error', answeredRequirement || requirement);
+      if (bundle && ['approve', 'deploy', 'validate', 'report'].includes(action)) {
+        // A lost HTTP response does not mean Salesforce failed. Fetch durable state,
+        // and block resubmission if even recovery is unavailable.
+        try { acceptBundle(await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}`, { token })); }
+        catch { setBundle(previous => ({ ...previous, state: 'unknown' })); }
+      }
+    } finally { setApproving(false); setActiveComponent(''); operationLock.current = false; setBusy(''); }
+  }
+
+  function reset() {
+    setConfirmDeploy(false);
+    setConversationId(null); setConversationOrg(''); setMessages([]); setInputMessage(''); setArchivedPlan(null);
+    setInformation('');
+    setArchivedPlan(null);
+    setSourceEditor(null); setRepairEditor(null); setRepairInstruction('');
+    setBundle(null); setApprovedHash(''); setError(''); setRepairTicket(''); setClarification(null);
+    setRequirement(''); setEditRequest(null); setSidebarOpen(false);
+    setShowSettings(true); setTab('chat'); setLayoutChoices([]); setLayoutDirty(false);
+    // Keep the previous package identifier so an in-progress job can be restored.
+  }
+
+  async function uploadRequirement(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    try {
+      if (file.size > 65536) throw new Error('Use a text or Markdown file smaller than 64 KB.');
+      setInputMessage(await file.text());
+      setError('');
+    } catch (failure) { setError(failure.message); }
+  }
+
+  function updateLayout(object,layout,enabled,sectionId) {
+    setLayoutDirty(true);
+    setLayoutChoices(previous => {
+      const choices=previous.map(choice=>({...choice,layouts:[...choice.layouts]}));
+      let choice=choices.find(item=>item.object===object);
+      if (!choice) {choice={object,layouts:[]};choices.push(choice);}
+      choice.layouts=choice.layouts.filter(item=>item.fullName!==layout.fullName);
+      if (enabled) choice.layouts.push({fullName:layout.fullName,sectionId:sectionId ?? layout.defaultSectionId});
+      return choices;
     });
-  };
-
-  /*
-   * =========================================================
-   * JIRA STORIES
-   * =========================================================
-   */
-
-  const createImplementationStories = () => {
-    setJiraStories([
-      {
-        id: 1,
-        title: "Analyze Salesforce requirement",
-        type: "Analysis",
-        description:
-          "Review the business requirement and identify Salesforce capabilities required.",
-        status: "Ready",
-      },
-      {
-        id: 2,
-        title: "Define Salesforce data model",
-        type: "Configuration",
-        description:
-          "Identify objects, fields, relationships and metadata changes.",
-        status: "Ready",
-      },
-      {
-        id: 3,
-        title: "Implement automation",
-        type: "Automation",
-        description:
-          "Configure Flow, validation rules, approvals and notifications.",
-        status: "Ready",
-      },
-      {
-        id: 4,
-        title: "Develop Apex / LWC components",
-        type: "Development",
-        description:
-          "Create Apex classes, triggers or Lightning Web Components where required.",
-        status: "Optional",
-      },
-      {
-        id: 5,
-        title: "Test and deploy",
-        type: "Deployment",
-        description:
-          "Create test scenarios and prepare metadata for deployment.",
-        status: "Ready",
-      },
-    ]);
-  };
-
-  /*
-   * =========================================================
-   * CLEAR CHAT
-   * =========================================================
-   */
-
-  const handleClearChat = () => {
-    setMessages([]);
-    setRequirement("");
-    setAttachment(null);
-    setPlanUploaded(null);
-    setJiraStories([]);
-  };
-
-  const isConnected =
-    data?.organization?.status === "Connected";
-
-  return (
-    <main className="h-[calc(100vh-64px)] overflow-hidden bg-white text-slate-900 dark:bg-zinc-950 dark:text-white">
-
-      {/* =====================================================
-          WORKSPACE HEADER
-          IMPORTANT:
-          This contains ONLY Workspace-specific controls.
-          Dashboard / Import / Migration / Settings are NOT
-          repeated here because they already exist globally.
-      ===================================================== */}
-
-      <div className="border-b border-slate-200 bg-white dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex h-14 items-center justify-between px-5">
-
-          {/* Workspace title */}
-
-          <div className="flex items-center gap-4">
-
-            <div className="flex items-center gap-2.5">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
-                <Sparkles size={17} />
-              </div>
-
-              <div>
-                <p className="text-sm font-semibold">
-                  Workspace
-                </p>
-
-                <p className="text-[9px] text-slate-400">
-                  Salesforce AI development workspace
-                </p>
-              </div>
-            </div>
-
-            {/* Chat / Jira tabs */}
-
-            <div className="ml-5 flex items-center gap-1">
-              <WorkspaceTab
-                active={activeTab === "chat"}
-                icon={MessageSquare}
-                label="Chat"
-                onClick={() => setActiveTab("chat")}
-              />
-
-              <WorkspaceTab
-                active={activeTab === "jira"}
-                icon={ListTodo}
-                label="Jira Stories"
-                onClick={() => setActiveTab("jira")}
-                badge={jiraStories.length || null}
-              />
-            </div>
-          </div>
-
-          {/* Connection indicator only */}
-
-          <div className="hidden items-center gap-2 sm:flex">
-            <span
-              className={[
-                "h-2 w-2 rounded-full",
-                isConnected
-                  ? "bg-emerald-500"
-                  : "bg-amber-500",
-              ].join(" ")}
-            />
-
-            <span className="text-[10px] text-slate-500">
-              {isConnected
-                ? data.organization.name
-                : "No Salesforce connection"}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* =====================================================
-          MAIN WORKSPACE
-      ===================================================== */}
-
-      <div className="flex h-[calc(100vh-120px)] min-h-0 overflow-hidden">
-
-        {/* ===================================================
-            LEFT SIDEBAR
-        =================================================== */}
-
-        <aside className="hidden w-[300px] shrink-0 border-r border-slate-200 bg-white lg:block dark:border-zinc-800 dark:bg-zinc-950">
-
-          <div className="flex h-full flex-col">
-
-            {/* New Chat */}
-
-            <div className="p-4">
-              <button
-                type="button"
-                onClick={handleNewChat}
-                className="flex h-11 w-full items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 text-left text-[12px] font-medium text-slate-800 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-200"
-              >
-                <CirclePlus size={17} />
-                <span>New Chat</span>
-              </button>
-            </div>
-
-            {/* Workspace Actions */}
-
-            <div className="px-4">
-
-              <SidebarAction
-                icon={GitBranch}
-                label="Import from Git"
-                onClick={() => setShowGitModal(true)}
-              />
-
-              <SidebarAction
-                icon={Upload}
-                label="Upload Plan"
-                onClick={() =>
-                  planInputRef.current?.click()
-                }
-              />
-
-              <input
-                ref={planInputRef}
-                type="file"
-                accept=".pdf,.doc,.docx,.txt,.md,.json"
-                className="hidden"
-                onChange={handleUploadPlan}
-              />
-            </div>
-
-            {/* Divider */}
-
-            <div className="mx-4 my-4 border-t border-slate-100 dark:border-zinc-900" />
-
-            {/* Recent Chats */}
-
-            <div className="min-h-0 flex-1 overflow-y-auto">
-
-              <div className="px-5 pb-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-[9px] font-semibold uppercase tracking-[0.08em] text-slate-400">
-                    Recent
-                  </p>
-
-                  <History
-                    size={13}
-                    className="text-slate-300"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1 px-2">
-
-                {chats.length === 0 ? (
-                  <div className="px-4 py-10 text-center">
-                    <MessageSquare
-                      size={22}
-                      className="mx-auto text-slate-300"
-                    />
-
-                    <p className="mt-2 text-[10px] text-slate-400">
-                      No recent chats
-                    </p>
-                  </div>
-                ) : (
-                  chats.map((chat) => (
-                    <RecentChat
-                      key={chat.id}
-                      chat={chat}
-                      active={activeChatId === chat.id}
-                      onClick={() =>
-                        handleOpenChat(chat)
-                      }
-                    />
-                  ))
-                )}
-
-              </div>
-
-              {chats.length > 5 && (
-                <button
-                  type="button"
-                  className="mt-3 flex items-center gap-1 px-5 text-[9px] font-medium text-blue-600"
-                >
-                  <ChevronRight size={11} />
-                  View all ({chats.length})
-                </button>
-              )}
-            </div>
-
-            {/* Salesforce Connection */}
-
-            <div className="border-t border-slate-200 p-4 dark:border-zinc-800">
-
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-zinc-800 dark:bg-zinc-900">
-
-                <div className="flex items-center justify-between">
-
-                  <div className="flex items-center gap-2">
-
-                    <span
-                      className={[
-                        "h-2 w-2 rounded-full",
-                        isConnected
-                          ? "bg-emerald-500"
-                          : "bg-amber-500",
-                      ].join(" ")}
-                    />
-
-                    <span className="text-[9px] font-medium text-slate-700 dark:text-zinc-300">
-                      {isConnected
-                        ? "Salesforce connected"
-                        : "Salesforce not connected"}
-                    </span>
-                  </div>
-
-                  {!isConnected && (
-                    <button
-                      type="button"
-                      className="text-[8px] font-semibold text-blue-600"
-                      onClick={() =>
-                        window.location.href = "/settings"
-                      }
-                    >
-                      Connect
-                    </button>
-                  )}
-                </div>
-
-                {isConnected && (
-                  <p className="mt-1 truncate text-[8px] text-slate-400">
-                    {data.organization.name}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </aside>
-
-        {/* ===================================================
-            CONTENT
-        =================================================== */}
-
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white dark:bg-zinc-950">
-
-          {/* Connection warning */}
-
-          {!isConnected && (
-            <div className="mx-5 mt-4 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
-
-              <div className="flex items-center gap-2">
-                <AlertCircle
-                  size={15}
-                  className="text-amber-500"
-                />
-
-                <p className="text-[10px] font-medium text-amber-700">
-                  Connect your Salesforce org to restore
-                  schema awareness and deployment capabilities.
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={() =>
-                  (window.location.href = "/settings")
-                }
-                className="text-[10px] font-semibold text-amber-600"
-              >
-                Connect Org
-              </button>
-            </div>
-          )}
-
-          {activeTab === "jira" ? (
-
-            <JiraStories
-              stories={jiraStories}
-              onBack={() => setActiveTab("chat")}
-              onGenerate={() => {
-                createImplementationStories();
-              }}
-            />
-
-          ) : (
-
-            <div className="flex min-h-0 flex-1 flex-col">
-
-              {/* =================================================
-                  CHAT CONTENT
-              ================================================= */}
-
-              <div className="min-h-0 flex-1 overflow-y-auto">
-
-                {messages.length === 0 ? (
-
-                  <EmptyWorkspace
-                    onSuggestion={(text) =>
-                      setRequirement(text)
-                    }
-                  />
-
-                ) : (
-
-                  <div className="mx-auto max-w-[900px] px-6 py-8">
-
-                    {messages.map((message) => (
-                      <ChatMessage
-                        key={message.id}
-                        message={message}
-                      />
-                    ))}
-
-                    {isGenerating && (
-                      <div className="mt-6 flex items-center gap-3">
-
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-                          <Bot size={15} />
-                        </div>
-
-                        <div className="flex items-center gap-1.5">
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400" />
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:100ms]" />
-                          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-400 [animation-delay:200ms]" />
-                        </div>
-
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* =================================================
-                  COMPOSER
-              ================================================= */}
-
-              <div className="sticky bottom-0 z-20 shrink-0 border-t border-slate-200 bg-white/95 p-4 backdrop-blur-md dark:border-zinc-800 dark:bg-zinc-950/95">
-
-                <div className="mx-auto max-w-[1000px]">
-
-                  {/* Attachment */}
-
-                  {(attachment || planUploaded) && (
-                    <div className="mb-2 flex items-center gap-2">
-
-                      <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
-
-                        <FileText
-                          size={13}
-                          className="text-blue-500"
-                        />
-
-                        <span className="max-w-[300px] truncate text-[9px] font-medium text-slate-600">
-                          {attachment?.name ||
-                            planUploaded?.name}
-                        </span>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAttachment(null);
-                            setPlanUploaded(null);
-                          }}
-                          className="text-slate-400 hover:text-red-500"
-                        >
-                          <X size={12} />
-                        </button>
-
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Input */}
-
-                  <div className="rounded-2xl border border-slate-200 bg-white shadow-sm transition focus-within:border-blue-400 focus-within:shadow-md focus-within:ring-4 focus-within:ring-blue-500/5 dark:border-zinc-700 dark:bg-zinc-900">
-
-                    <textarea
-                      value={requirement}
-                      onChange={(event) =>
-                        setRequirement(event.target.value)
-                      }
-                      onKeyDown={(event) => {
-                        if (
-                          event.key === "Enter" &&
-                          !event.shiftKey
-                        ) {
-                          event.preventDefault();
-                          handleGenerate();
-                        }
-                      }}
-                      placeholder="Describe your Salesforce requirement, or attach a BRD..."
-                      rows={2}
-                      className="max-h-32 min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 text-[11px] leading-5 text-slate-700 outline-none placeholder:text-slate-400 dark:text-zinc-200 dark:placeholder:text-zinc-600"
-                    />
-
-                    <div className="flex items-center justify-between px-3 pb-2">
-
-                      <div className="flex items-center gap-1">
-
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          className="hidden"
-                          accept=".pdf,.doc,.docx,.txt,.md,.csv"
-                          onChange={handleAttachment}
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            fileInputRef.current?.click()
-                          }
-                          className="flex h-8 w-8 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-blue-600"
-                          title="Attach file"
-                        >
-                          <Paperclip size={14} />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setShowGitModal(true)
-                          }
-                          className="flex h-8 items-center gap-1.5 rounded-lg px-2 text-[8px] text-slate-400 hover:bg-slate-100 hover:text-blue-600"
-                        >
-                          <FolderGit2 size={13} />
-                          Git
-                        </button>
-
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={
-                          isGenerating ||
-                          (!requirement.trim() &&
-                            !attachment &&
-                            !planUploaded)
-                        }
-                        onClick={handleGenerate}
-                        className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        {isGenerating ? (
-                          <RefreshCw
-                            size={14}
-                            className="animate-spin"
-                          />
-                        ) : (
-                          <Send size={14} />
-                        )}
-                      </button>
-                    </div>
-                  </div>
-
-                  <p className="mt-2 text-center text-[8px] text-slate-400">
-                    ApexAI can make mistakes. Review generated
-                    Salesforce changes before deployment.
-                  </p>
-
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
-
-      {/* =====================================================
-          GIT MODAL
-      ===================================================== */}
-
-      {showGitModal && (
-        <GitModal
-          gitUrl={gitUrl}
-          setGitUrl={setGitUrl}
-          onClose={() => {
-            setShowGitModal(false);
-            setGitUrl("");
-          }}
-          onImport={handleImportGit}
-        />
-      )}
-    </main>
-  );
-}
-
-/*
- * =========================================================
- * WORKSPACE TAB
- * =========================================================
- */
-
-function WorkspaceTab({
-  active,
-  icon: Icon,
-  label,
-  onClick,
-  badge,
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "inline-flex h-9 items-center gap-2 rounded-lg px-3 text-[11px] font-medium transition",
-        active
-          ? "bg-blue-50 text-blue-600"
-          : "text-slate-500 hover:bg-slate-50 hover:text-slate-800",
-      ].join(" ")}
-    >
-      <Icon size={15} />
-
-      {label}
-
-      {badge && (
-        <span className="rounded-full bg-blue-100 px-1.5 text-[7px] text-blue-600">
-          {badge}
-        </span>
-      )}
-    </button>
-  );
-}
-
-/*
- * =========================================================
- * SIDEBAR ACTION
- * =========================================================
- */
-
-function SidebarAction({
-  icon: Icon,
-  label,
-  onClick,
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex h-10 w-full items-center gap-3 rounded-lg px-3 text-left text-[11px] font-medium text-slate-600 transition hover:bg-slate-50 hover:text-blue-600"
-    >
-      <Icon size={15} />
-      {label}
-    </button>
-  );
-}
-
-/*
- * =========================================================
- * RECENT CHAT
- * =========================================================
- */
-
-function RecentChat({
-  chat,
-  active,
-  onClick,
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "group flex w-full items-start gap-2 rounded-lg px-3 py-2.5 text-left transition",
-        active
-          ? "bg-slate-100 text-slate-900"
-          : "text-slate-500 hover:bg-slate-50",
-      ].join(" ")}
-    >
-      <MessageSquare
-        size={13}
-        className={[
-          "mt-0.5 shrink-0",
-          active
-            ? "text-blue-500"
-            : "text-slate-300",
-        ].join(" ")}
-      />
-
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-[10px] font-medium">
-          {chat.title}
-        </p>
-
-        <p className="mt-0.5 truncate text-[8px] text-slate-400">
-          {chat.preview}
-        </p>
-      </div>
-
-      <MoreHorizontal
-        size={12}
-        className="mt-0.5 hidden shrink-0 text-slate-300 group-hover:block"
-      />
-    </button>
-  );
-}
-
-/*
- * =========================================================
- * EMPTY WORKSPACE
- * =========================================================
- */
-
-function EmptyWorkspace({
-  onSuggestion,
-}) {
-  return (
-    <div className="flex min-h-[520px] items-center justify-center px-6">
-
-      <div className="w-full max-w-[650px] text-center">
-
-        <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl border border-blue-100 bg-blue-50 text-blue-500">
-          <Bot
-            size={28}
-            strokeWidth={1.7}
-          />
-        </div>
-
-        <h1 className="mt-6 text-[22px] font-semibold tracking-tight text-slate-700">
-          What would you like to build?
-        </h1>
-
-        <p className="mx-auto mt-3 max-w-[600px] text-[12px] leading-6 text-slate-400">
-          Describe your Salesforce requirement in natural
-          language. ApexAI can analyze your requirement and
-          create a complete implementation plan.
-        </p>
-
-        <div className="mt-7 flex flex-wrap justify-center gap-2">
-
-          <Suggestion
-            text="Create an Opportunity validation rule"
-            onClick={() =>
-              onSuggestion(
-                "Create a validation rule for Opportunity amount over $50,000."
-              )
-            }
-          />
-
-          <Suggestion
-            text="Build a Case management solution"
-            onClick={() =>
-              onSuggestion(
-                "Build a Salesforce Case management solution with automated assignment and escalation."
-              )
-            }
-          />
-
-          <Suggestion
-            text="Create an LWC dashboard"
-            onClick={() =>
-              onSuggestion(
-                "Create a Lightning Web Component dashboard for Salesforce organization metrics."
-              )
-            }
-          />
-
-        </div>
-
-        <div className="mt-8 flex items-center justify-center gap-2 text-[9px] text-slate-400">
-          <Sparkles size={12} />
-          AI-powered Salesforce implementation planning
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * SUGGESTION
- * =========================================================
- */
-
-function Suggestion({
-  text,
-  onClick,
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-[9px] text-slate-500 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
-    >
-      {text}
-    </button>
-  );
-}
-
-/*
- * =========================================================
- * CHAT MESSAGE
- * =========================================================
- */
-
-function ChatMessage({
-  message,
-}) {
-  const isUser = message.role === "user";
-
-  return (
-    <div
-      className={[
-        "mb-7 flex gap-3",
-        isUser
-          ? "justify-end"
-          : "justify-start",
-      ].join(" ")}
-    >
-
-      {!isUser && (
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-          <Bot size={15} />
-        </div>
-      )}
-
-      <div
-        className={[
-          "max-w-[720px] rounded-xl px-4 py-3 text-[11px] leading-5",
-          isUser
-            ? "bg-blue-600 text-white"
-            : "border border-slate-200 bg-white text-slate-600",
-        ].join(" ")}
-      >
-
-        {message.content}
-
-        {message.plan && (
-          <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/50 p-3">
-
-            <div className="flex items-center gap-2">
-
-              <Sparkles
-                size={13}
-                className="text-blue-500"
-              />
-
-              <span className="text-[9px] font-semibold text-blue-600">
-                Implementation plan generated
-              </span>
-
-            </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-2">
-
-              <PlanItem
-                icon={Database}
-                title="Data Model"
-              />
-
-              <PlanItem
-                icon={GitBranch}
-                title="Automation"
-              />
-
-              <PlanItem
-                icon={Code2}
-                title="Development"
-              />
-
-              <PlanItem
-                icon={Check}
-                title="Testing & Deployment"
-              />
-
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * PLAN ITEM
- * =========================================================
- */
-
-function PlanItem({
-  icon: Icon,
-  title,
-}) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2">
-
-      <Icon
-        size={12}
-        className="text-blue-500"
-      />
-
-      <span className="text-[8px] font-medium text-slate-600">
-        {title}
-      </span>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * JIRA STORIES
- * =========================================================
- */
-
-function JiraStories({
-  stories,
-  onBack,
-  onGenerate,
-}) {
-  return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
-
-      <div className="mx-auto max-w-[1000px] px-6 py-7">
-
-        <div className="flex items-center justify-between">
-
-          <div className="flex items-center gap-3">
-
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-              <ListTodo size={16} />
-            </div>
-
-            <div>
-              <h1 className="text-lg font-semibold text-slate-800">
-                Jira Stories
-              </h1>
-
-              <p className="mt-0.5 text-[9px] text-slate-400">
-                Convert your Salesforce requirement into
-                implementation stories.
-              </p>
-            </div>
-
-          </div>
-
-          <button
-            type="button"
-            onClick={onBack}
-            className="flex items-center gap-1.5 text-[9px] font-medium text-blue-600"
-          >
-            <ArrowLeft size={12} />
-            Back to Chat
-          </button>
-
-        </div>
-
-        {stories.length === 0 ? (
-
-          <div className="mt-8 rounded-xl border border-slate-200 bg-white p-10 text-center">
-
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-slate-50 text-slate-300">
-              <ListTodo size={21} />
-            </div>
-
-            <h2 className="mt-4 text-[13px] font-semibold text-slate-700">
-              No Jira stories yet
-            </h2>
-
-            <p className="mx-auto mt-2 max-w-[450px] text-[9px] leading-5 text-slate-400">
-              Start a Salesforce requirement in Chat and
-              ApexAI can generate implementation stories.
-            </p>
-
-            <button
-              type="button"
-              onClick={onGenerate}
-              className="mt-5 inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-[9px] font-semibold text-white hover:bg-blue-700"
-            >
-              <Sparkles size={12} />
-              Generate Stories
-            </button>
-
-          </div>
-
-        ) : (
-
-          <div className="mt-6 space-y-3">
-
-            {stories.map((story) => (
-              <JiraStory
-                key={story.id}
-                story={story}
-              />
-            ))}
-
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * JIRA STORY
- * =========================================================
- */
-
-function JiraStory({
-  story,
-}) {
-  return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:shadow-sm">
-
-      <div className="flex items-start gap-4">
-
-        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
-          <FileCode2 size={15} />
-        </div>
-
-        <div className="min-w-0 flex-1">
-
-          <div className="flex flex-wrap items-center gap-2">
-
-            <span className="text-[8px] font-semibold text-slate-400">
-              APEX-{story.id}
-            </span>
-
-            <h3 className="text-[11px] font-semibold text-slate-800">
-              {story.title}
-            </h3>
-
-          </div>
-
-          <p className="mt-2 text-[9px] leading-5 text-slate-500">
-            {story.description}
-          </p>
-
-          <div className="mt-3 flex items-center gap-2">
-
-            <span className="rounded-full bg-slate-100 px-2 py-1 text-[7px] font-medium text-slate-500">
-              {story.type}
-            </span>
-
-            <span className="rounded-full bg-emerald-50 px-2 py-1 text-[7px] font-medium text-emerald-600">
-              {story.status}
-            </span>
-
-          </div>
-        </div>
-
-        <button
-          type="button"
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-slate-300 hover:bg-slate-50 hover:text-blue-600"
-        >
-          <ExternalLink size={13} />
-        </button>
-
-      </div>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * GIT MODAL
- * =========================================================
- */
-
-function GitModal({
-  gitUrl,
-  setGitUrl,
-  onClose,
-  onImport,
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4 backdrop-blur-[2px]">
-
-      <div className="w-full max-w-[520px] rounded-xl border border-slate-200 bg-white shadow-xl">
-
-        <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
-
-          <div className="flex items-center gap-3">
-
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-slate-50 text-slate-600">
-              <FolderGit2 size={17} />
-            </div>
-
-            <div>
-              <h2 className="text-[12px] font-semibold text-slate-800">
-                Import from Git
-              </h2>
-
-              <p className="mt-0.5 text-[8px] text-slate-400">
-                Connect a Salesforce project repository.
-              </p>
-            </div>
-
-          </div>
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="flex h-7 w-7 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100"
-          >
-            <X size={14} />
-          </button>
-
-        </div>
-
-        <div className="p-5">
-
-          <label className="text-[9px] font-medium text-slate-600">
-            Repository URL
-          </label>
-
-          <div className="mt-2 flex items-center rounded-lg border border-slate-200 bg-slate-50 px-3">
-
-            <GitBranch
-              size={14}
-              className="text-slate-400"
-            />
-
-            <input
-              value={gitUrl}
-              onChange={(event) =>
-                setGitUrl(event.target.value)
-              }
-              placeholder="https://github.com/company/salesforce-project"
-              className="h-10 min-w-0 flex-1 bg-transparent px-2 text-[10px] text-slate-700 outline-none placeholder:text-slate-400"
-            />
-
-          </div>
-
-          <div className="mt-4 rounded-lg bg-blue-50 p-3">
-
-            <div className="flex gap-2">
-
-              <Sparkles
-                size={13}
-                className="mt-0.5 shrink-0 text-blue-500"
-              />
-
-              <p className="text-[8px] leading-4 text-blue-600">
-                ApexAI will use the repository as
-                implementation context for your Salesforce
-                requirement.
-              </p>
-
-            </div>
-          </div>
-        </div>
-
-        <div className="flex items-center justify-end gap-2 border-t border-slate-100 px-5 py-4">
-
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-4 py-2 text-[9px] font-medium text-slate-500 hover:bg-slate-50"
-          >
-            Cancel
-          </button>
-
-          <button
-            type="button"
-            disabled={!gitUrl.trim()}
-            onClick={onImport}
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-[9px] font-semibold text-white hover:bg-blue-700 disabled:opacity-40"
-          >
-            <Download size={11} />
-            Import Repository
-          </button>
-
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/*
- * =========================================================
- * SHORT TITLE
- * =========================================================
- */
-
-function shortenTitle(text) {
-  if (!text) {
-    return "New Salesforce requirement";
   }
 
-  const clean = text
-    .replace(/\s+/g, " ")
-    .trim();
+  const components = bundle?.components?.length
+    ? bundle.components
+    : bundle ? [{ metadataType: 'LightningComponentBundle', fullName: bundle.componentName }] : [];
+  const selectionDirty = selectedComponents.length !== components.length;
+  const approved = Boolean(bundle && approvedHash === bundle.sourceHash) && !selectionDirty;
+  const layoutQuestions = (bundle?.layoutOptions?.objects || []).filter(object =>
+    object.layouts.length > 1);
+  const needsLayoutReview = !approved && layoutQuestions.length > 0;
 
-  if (clean.length <= 45) {
-    return clean;
-  }
+  return (
+    <div className={`ws-shell ws-theme-${theme}`}>
+      <aside className={`ws-sidebar ${sidebarOpen ? 'ws-sidebar-open' : ''}`}>
+        <div className="ws-brand"><Cloud size={22} /><strong>Workspace</strong><button className="ws-mobile-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
+        <div className="ws-sidebar-body">
+          <button className="ws-new" disabled={Boolean(busy)} onClick={reset}><Plus size={18} /> New Chat</button>
+          <button className="ws-side-action" disabled={locked} onClick={() => uploadRef.current?.click()}><Upload size={17} /> Upload requirement</button>
+          <input ref={uploadRef} hidden type="file" accept=".txt,.md" onChange={uploadRequirement} />
+          <p className="ws-label">PREVIOUS CHATS</p>{busy === 'generate' && <div className="ws-history"><MessageSquare size={16} /><span>{requirement}</span></div>}
+          {chats.filter(chat => chat.targetOrg === org).map(chat => <button key={chat.id} title={chat.requirement} aria-label={`Open chat: ${chat.requirement}`} className="ws-history" disabled={Boolean(busy)} onClick={() => loadChat(chat)}><MessageSquare size={16} /><span>{chat.requirement || 'Saved requirement'}</span></button>)}
+          {!chats.some(chat => chat.targetOrg === org) && recovery?.targetOrg === org && <button className="ws-history" disabled={Boolean(busy)} onClick={() => loadChat(recovery)}><MessageSquare size={16} /><span>{recovery.requirement || 'Previous requirement'}</span></button>}
+          {historyError && <p className="ws-muted">{historyError}</p>}
+        </div>
+        <div className="ws-org"><Cloud size={16} /><div><select aria-label="Target org" className="ws-input" value={org} disabled={Boolean(busy || queuedGeneration) || Boolean(conversationId)} onChange={event => selectOrganization(event.target.value)}>{organizations.map(item => <option key={item.id} value={item.id}>{!/^00D[A-Za-z0-9]+$/.test(item.name || '') ? item.name : item.username}</option>)}</select><small>Active Salesforce org</small></div></div>
+      </aside>
 
-  return `${clean.slice(0, 45)}...`;
+      <main className="ws-main">{sidebarOpen && <button className="ws-drawer-overlay" aria-label="Close navigation" onClick={() => setSidebarOpen(false)} />}
+        <header className="ws-header">
+          <div className="ws-tabs"><button className="ws-mobile-toggle" aria-label="Open workspace navigation" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
+            <button className={tab === 'chat' ? 'ws-tab active' : 'ws-tab'} onClick={() => setTab('chat')}><MessageSquare size={18} /> Chat</button>
+            <button className={tab === 'files' ? 'ws-tab active' : 'ws-tab'} onClick={() => setTab('files')}><Code2 size={18} /> Source files</button>
+          <button className={tab === 'jira' ? 'ws-tab active' : 'ws-tab'} onClick={loadJira}><Ticket size={18} />Jira stories</button></div>
+          <nav className="ws-nav"><Link to="/dashboard">Dashboard</Link><Link to="/import">Import</Link><Link to="/migration">Migration</Link><Link to="/settings" aria-label="Settings"><Settings2 size={19} /></Link><button className="ws-settings-toggle" onClick={toggleTheme} aria-label="Toggle theme">{theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}</button></nav>
+        </header>
+
+        <div className="ws-scroll">{activeOrg?.status === 'Reconnect required' && <div className="ws-error" role="alert">Salesforce access needs to be restored. <Link to="/settings#salesforce">Reconnect your org</Link></div>}
+          {tab === 'jira' && <section className="ws-jira"><header><h2>Your assigned stories ({jiraStories.length})</h2><button className="ws-button secondary" disabled={jiraLoading} onClick={loadJira}>Refresh</button></header>{jiraLoading && <p role="status">Loading Jira…</p>}{jiraError && <p role="alert">{jiraError} <Link to="/settings#jira">Configure Jira</Link></p>}{jiraStories.map(story => <article key={story.key} className="ws-story"><div><div className="ws-story-tags"><a href={story.url} target="_blank" rel="noreferrer">{story.key}</a>{[story.status, story.priority, story.issueType].filter(Boolean).map((tag, index) => <span className="ws-badge" key={index}>{tag}</span>)}</div><h3>{story.summary}</h3><p>{story.description || 'No description provided.'}</p></div><button className="ws-button" disabled={locked || !org} onClick={() => sendMessage(`Jira story ${story.key}: ${story.summary}\n\n${story.description || ''}`, true)}><Code2 size={16} />Build</button></article>)}{!jiraLoading && !jiraError && !jiraStories.length && <p>No assigned Jira issues found.</p>}</section>}
+          {tab === 'chat' && messages.length > 0 && <div aria-label="Conversation history">{messages.map(message => <section key={message.id} className={message.role === 'user' ? 'ws-user-message' : message.kind === 'error' ? 'ws-error' : 'ws-response'}><small>{message.role === 'user' ? 'You' : 'Assistant'}</small><p style={{ whiteSpace: 'pre-wrap' }}>{message.content}</p>{message.plan_id && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => viewSavedPlan(message.plan_id)}>View saved plan</button>}</section>)}</div>}
+          {!bundle && !busy && !messages.length && !clarification && !information && tab !== 'jira' && <div className="ws-empty"><div className="ws-bot"><Bot size={28} /></div><h1>What would you like to build?</h1><p>Describe your Salesforce requirement below. Review the implementation, approve it, then deploy to your org.</p><div className="ws-empty-tags"><span>Apex services</span><span>Lightning components</span><span>Salesforce validation</span></div></div>}
+
+          {busy === 'generate' && !bundle && !messages.length && tab === 'chat' && <div className="ws-user-message"><span>You</span><p>{requirement}</p></div>}
+          {bundle && tab === 'chat' && <>
+            {!messages.length && <div className="ws-user-message"><span>You</span><p>{bundle.requirement}</p></div>}
+            <div className="ws-assistant"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>I prepared a plan for your requirement in <strong>{orgName}</strong>.</p><p>{bundle.plan?.summary || bundle.componentName}</p><ul>{components.map(item => <li key={`${item.metadataType}:${item.fullName}`}><strong>{item.fullName}</strong> <span>— {item.metadataType}</span></li>)}</ul><p>Review the proposed changes and source files, then approve the plan. Approval starts Salesforce validation without deploying. Deploy appears immediately and becomes enabled after validation passes.</p></div></div>
+          </>}
+
+          {needsLayoutReview && <div className="ws-assistant"><div className="ws-avatar"><Bot size={20} /></div><section className="ws-response ws-layout-question">
+              <h3>Where should I add the new fields?</h3>
+              <p>Choose the page layouts and sections below. I’ll include your choices in the files for approval.</p>
+              {layoutQuestions.map(object => <fieldset key={object.object} disabled={Boolean(busy || queuedGeneration) || approved}>
+                <legend>{object.layouts.length > 1 ? `I found ${object.layouts.length} page layouts for ${object.object}. Which should I use?` : `Which section on ${object.object} should contain the new fields?`}</legend>
+                {object.layouts.map(layout => {
+                  const selected=layoutChoices.find(choice=>choice.object===object.object)?.layouts.find(choice=>choice.fullName===layout.fullName);
+                  return <div key={layout.fullName} className="ws-plan-note">
+                    <label><input type="checkbox" checked={Boolean(selected)} onChange={event=>updateLayout(object.object,layout,event.target.checked,selected?.sectionId)} /> {layout.fullName}{layout.recommended ? ' (recommended)' : ''}</label>
+                    {selected && object.fields.length>0 && <select className="ws-input" aria-label={`Section for ${layout.fullName}`} value={selected.sectionId ?? ''} onChange={event=>updateLayout(object.object,layout,true,event.target.value || null)}>
+                      <option value="">Select a section</option>{layout.sections.map(section=><option key={section.id} value={section.id}>{section.label}</option>)}
+                    </select>}
+                  </div>;
+                })}
+              </fieldset>)}
+              {!approved && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={()=>run('review-layouts')}>Save layout choices and update reviewed files</button>}
+              {(!bundle.layoutReady || layoutDirty) && <p>Complete layout review and update the files before approving.</p>}
+            </section></div>}
+
+          {bundle && <section className="ws-plan">
+            <div className="ws-plan-header"><div><h2>{bundle.componentName}</h2><p>Implementation plan · {orgName}</p></div><span className={`ws-badge ${bundle.state === 'deployed' || bundle.state === 'validated' ? 'success' : ''}`}>{statusLabel(bundle)}</span></div>
+            {bundle.state !== 'deployed' && <div className="ws-selection"><span>{selectedComponents.length} of {components.length} components selected</span><div>{['Valid only', 'All', 'None'].map(choice => <button key={choice} className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !canRevise} onClick={() => setSelectedComponents(choice === 'None' ? [] : components.filter(component => choice === 'All' || !componentErrors(bundle, component).length).map(item => `${item.metadataType}:${item.fullName}`))}>{choice}</button>)}</div></div>}
+            <div className="ws-components">{components.map(item => <div className="ws-component" key={`${item.metadataType}:${item.fullName}`}>{bundle.state !== 'deployed' && <input type="checkbox" aria-label={`Select ${item.fullName}`} checked={selectedComponents.includes(`${item.metadataType}:${item.fullName}`)} disabled={Boolean(busy || queuedGeneration) || !canRevise || !sameOrg} onChange={event => setSelectedComponents(previous => event.target.checked ? [...previous, `${item.metadataType}:${item.fullName}`] : previous.filter(key => key !== `${item.metadataType}:${item.fullName}`))} />}<Code2 size={20} /><div><strong>{item.fullName}</strong><small>{item.metadataType}</small>{componentErrors(bundle, item).map((message, index) => <small className="ws-log-failure" key={index}>{message}</small>)}</div><span className="ws-badge">CREATE</span>{bundle.state === 'deployed' && item.metadataType === 'Flow' && <div className="ws-component-actions"><button type="button" className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || bundle.flowActivations?.[item.fullName]?.state === 'active'} onClick={() => run('activate-flow',item.fullName)}>{busy === 'activate-flow' && activeComponent === item.fullName ? 'Activating…' : bundle.flowActivations?.[item.fullName]?.state === 'active' ? 'Active' : ['running','unknown'].includes(bundle.flowActivations?.[item.fullName]?.state) ? 'Check activation' : 'Activate'}</button>{bundle.flowActivations?.[item.fullName]?.message && <small role="status">{bundle.flowActivations[item.fullName].message}</small>}</div>}{bundle.state !== 'deployed' && <div className="ws-component-actions"><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => openSourceEditor(item)}><Pencil size={14} />Edit</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => { if (canRepair) run('repair', item.fullName, '', ''); else { setRepairEditor(item.fullName); setRepairInstruction(''); } }}><Wrench size={14} />{busy === 'repair' && activeComponent === item.fullName ? 'Fixing…' : 'Fix with AI'}</button></div>}</div>)}</div>
+            {bundle.operation === 'deploy' && <section className="ws-deployment" aria-live="polite"><h3>{bundle.state === 'deployed' ? `Done — ${components.length}/${components.length}` : bundle.state === 'failed' ? 'Deployment failed' : 'Deploying selected components…'}{['deployed', 'failed'].includes(bundle.state) && bundle.operationSeconds != null && ` in ${Number(bundle.operationSeconds).toFixed(1)}s`}</h3><p>{orgName} · Job {bundle.jobId || 'being submitted'}</p><div className="ws-deployment-log">{bundle.state === 'deployed' && components.map(item => <div key={`${item.metadataType}:${item.fullName}`} className="ws-log-success">✓ CREATE {item.metadataType} — {item.fullName}: deployed</div>)}{(bundle.lastResult?.result?.details?.componentFailures || []).map((failure, index) => <div key={index} className="ws-log-failure">✕ {failure.fullName || failure.fileName}: {failure.problem}</div>)}{!['deployed', 'failed'].includes(bundle.state) && <div>Waiting for Salesforce completion. Status refreshes automatically.</div>}</div><progress aria-label="Deployment progress" max="1" {...(bundle.state === 'deployed' ? { value: 1 } : {})} /></section>}
+            {bundle.testClasses?.length > 0 && <p className="ws-plan-note">Tests: {bundle.testClasses.join(', ')}</p>}
+
+            {bundle.localChecks?.warnings?.length > 0 && <pre className="ws-results">{JSON.stringify(bundle.localChecks.warnings, null, 2)}</pre>}
+            {tab === 'files' && <div className="ws-files">{Object.entries(bundle.files).map(([path, source]) => <details key={path}><summary><FileText size={16} />{path}</summary><pre><code>{source}</code></pre></details>)}<details><summary>Source fingerprint</summary><pre>{bundle.sourceHash}</pre></details></div>}
+            {bundle.state !== 'deployed' && <div className="ws-plan-footer">
+              {canRevise && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => editPlan()}><Pencil size={15} />Edit request</button>}
+              {canRepair && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('repair')}><Wrench size={15} />Fix with AI</button>}
+              {!approved && !approving && bundle.state !== 'rejected' && <>
+                <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !bundle.layoutReady || layoutDirty || !selectedComponents.length} onClick={() => run(approved ? 'validate' : 'approve')}><ShieldCheck size={17} />Approve</button>
+                {!approved && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('reject')}>Reject Plan</button>}
+              </>}
+              {(approved || approving) && bundle.state !== 'deployed' && <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canDeploy(bundle, approvedHash)} onClick={() => setConfirmDeploy(true)}>Deploy to {orgName}</button>}
+              {busy === 'validate' && <span role="status">Validating with Salesforce. No changes are being deployed.</span>}
+              {bundle.state === 'deployed' && <span className="ws-badge success">Deployment completed</span>}
+              {['queued', 'pending', 'unknown', 'running'].includes(bundle.state) && <>
+                {bundle.jobId && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('report')}>Check job status</button>}
+                <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('refresh')}>Refresh status</button>
+              </>}
+            </div>}
+            {confirmDeploy && <section className="ws-status ws-confirm" role="region" aria-labelledby="ws-confirm-title">
+              <h3 id="ws-confirm-title">Are you sure you want to deploy?</h3>
+              <p>The approved files passed validation. This will deploy them to <strong>{orgName}</strong>.</p>
+              <div className="ws-plan-footer">
+                <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canDeploy(bundle, approvedHash)} onClick={() => { setConfirmDeploy(false); run('deploy'); }}>Yes, deploy</button>
+                <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setConfirmDeploy(false)}>Cancel</button>
+              </div>
+            </section>}
+            {!sameOrg && <p className="ws-error">This package belongs to {orgName}. Select its original org before validating or deploying.</p>}
+            <p className="ws-plan-note">Approval applies to all displayed files and the saved target org.</p>
+          </section>}
+
+          {bundle?.sourceChanges?.length > 0 && <section className="ws-status"><h3>Source changes · approval required</h3>{bundle.sourceChanges.map(change => <details key={change.path}><summary>{change.path}</summary><p>Before</p><pre style={{ overflow: 'auto' }}>{change.before}</pre><p>After</p><pre style={{ overflow: 'auto' }}>{change.after}</pre></details>)}<p>Source saved. Review the changes; Salesforce validation runs after approval.</p></section>}
+          {archivedPlan && <section className="ws-status"><h3>Saved plan · {archivedPlan.id}</h3><p>{archivedPlan.plan?.summary}</p><p>{statusText(archivedPlan)}</p>{Object.entries(archivedPlan.files).map(([path, source]) => <details key={path}><summary>{path}</summary><pre style={{ overflow: 'auto' }}>{source}</pre></details>)}<button className="ws-button secondary" onClick={() => setArchivedPlan(null)}>Close saved plan</button></section>}
+          {sourceEditor && <section className="ws-status"><h3>Edit source · {sourceEditor.name}</h3><p>Save changes, review the files, then approve again. Salesforce validation checks deployment compatibility.</p><div className="ws-plan-footer">{Object.keys(sourceEditor.files).map(path => <button key={path} className="ws-button secondary" onClick={() => setSourceEditor(previous => ({ ...previous, path }))}>{path.split('/').pop()}</button>)}</div><textarea className="ws-input ws-edit-request" style={{ minHeight: 360, fontFamily: 'monospace', width: '100%' }} spellCheck={false} aria-label={`Source ${sourceEditor.path}`} value={sourceEditor.files[sourceEditor.path]} disabled={Boolean(busy || queuedGeneration)} onChange={event => { const text = event.target.value; setSourceEditor(previous => ({ ...previous, files: { ...previous.files, [previous.path]: text } })); }} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('save-source', sourceEditor.name)}>Save source</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setSourceEditor(null)}>Cancel</button></div></section>}
+          {repairEditor && <section className="ws-status"><h3>Fix with AI · {repairEditor}</h3><p>AI will use the saved error and this component’s source. Describe any additional correction you want.</p><textarea className="ws-input ws-edit-request" aria-label="AI correction instructions" value={repairInstruction} disabled={Boolean(busy || queuedGeneration)} onChange={event => setRepairInstruction(event.target.value)} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || (!repairInstruction.trim() && !canRepair)} onClick={() => run('repair', repairEditor)}>{busy === 'repair' ? 'Fixing…' : 'Apply AI fix'}</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setRepairEditor(null)}>Cancel</button></div></section>}
+          {editRequest && <section className="ws-status"><h3>Edit {editRequest}</h3><p>Update the requirement or describe the component change. This generates a new draft; its files need fresh approval.</p><textarea className="ws-input ws-edit-request" value={editText} disabled={Boolean(busy || queuedGeneration)} onChange={event => setEditText(event.target.value)} aria-label="Updated requirement" /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !editText.trim()} onClick={() => run('revise')}>Generate revised plan</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setEditRequest(null)}>Cancel</button></div></section>}
+          {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{bundle.lastResult?.result?.details?.componentFailures?.length > 0 && <ul className="ws-error">{bundle.lastResult.result.details.componentFailures.map((failure, index) => <li key={`${failure.fileName}:${index}`}><strong>{failure.fileName || failure.fullName}</strong>: {failure.problem}</li>)}</ul>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
+          {(approving || (approved && busy === 'validate')) && <div className="ws-status" role="status">Approved · Validating with Salesforce…</div>}
+          {busy && <div className="ws-status" role="status"><span className="ws-spinner" />{['generate','fix-generation'].includes(busy) ? 'Thinking…' : busy === 'repair' ? 'AI is reviewing the saved failure and generating a corrected draft…' : busy === 'revise' ? 'Generating your revised plan…' : `${busy}: waiting for Salesforce…`}</div>}
+          {information && <section className="ws-status" role="status"><h3>Workspace update</h3><p>{information}</p></section>}
+          {clarification && !messages.some(message => message.role === 'assistant' && message.kind === 'clarification' && message.content === clarification.question) && <div className="ws-assistant" aria-live="polite"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{clarification.question}</p></div></div>}
+          {generationInThisChat && <div className="ws-assistant" role="status"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{jobProgress?.state === 'reconnecting' ? 'Reconnecting to your saved request…' : 'Thinking…'}</p></div></div>}
+          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />Fix with AI</button>}{!clarification && <Link className="ws-settings-toggle" to="/settings">Review connections</Link>}</div>}
+        </div>
+
+        <footer className="ws-composer-area">
+          <form onSubmit={event => { event.preventDefault(); sendMessage(); }}>
+            <div className="ws-composer-toolbar"><span>Automatic planning · {orgName}</span><button type="button" className="ws-settings-toggle" onClick={() => setShowSettings(value => !value)}><Settings2 size={15} /> Implementation settings</button></div>
+            {showSettings && <div className="ws-settings"><Link to="/settings#salesforce">Salesforce connection</Link><Link to="/settings#ai">AI provider</Link><Link to="/settings#jira">Jira connection</Link></div>}
+            <div className="ws-composer"><button type="button" aria-label="Upload text requirement" disabled={locked} onClick={() => uploadRef.current?.click()}><Upload size={19} /></button><textarea ref={composerRef} aria-label="Message" rows={2} maxLength={20000} required value={inputMessage} disabled={!org || activeOrg?.status === 'Reconnect required'} onChange={event => setInputMessage(event.target.value)} placeholder={clarification ? "Reply here, or give a complete request with a different component name…" : "Describe a requirement or add a follow-up…"} /><button className="ws-send" type="submit" aria-label="Send message" disabled={locked || !org || !inputMessage.trim()}><Send size={20} /></button></div>
+            <p className="ws-composer-note">{queuedGeneration && !generationInThisChat ? 'Another chat has a pending request. You can browse chats and type here; sending becomes available when it finishes.' : ['queued', 'running', 'pending', 'unknown'].includes(bundle?.state) ? 'Check the current Salesforce operation before submitting a follow-up. You can type your next message now.' : 'Continue in this chat. Each new draft needs its own approval and validation.'}</p>
+          </form>
+        </footer>
+      </main>
+    </div>
+  );
 }
-
-export default Workspace;

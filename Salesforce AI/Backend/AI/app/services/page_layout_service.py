@@ -1,8 +1,9 @@
-"""Add CREATE fields to the Admin default layout's Information section.
+"""Add CREATE fields to reviewed layouts and sections.
 
 Retrieve into a separate project: never overwrite generated fields or FLS.
 Only selected layouts and a narrow Admin overlay enter the deployment.
 """
+from Backend.AI.app.services.metadata_safety import safe_source_target
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -56,7 +57,7 @@ def select_default_layout(profile, object_name):
     return names.pop()
 
 
-def add_fields(layout, field_roots):
+def add_fields(layout, field_roots, section_id=None):
     if layout.tag != Q("Layout"):
         raise ValueError("Retrieved XML is not a Salesforce Layout.")
     existing = {node.text for node in layout.findall(f"{Q('layoutSections')}/{Q('layoutColumns')}/{Q('layoutItems')}/{Q('field')}")}
@@ -67,6 +68,8 @@ def add_fields(layout, field_roots):
     exact = [s for s in sections if (s.findtext(Q("label")) or "").strip().casefold() == "information"]
     candidates = exact or [s for s in sections if (s.findtext(Q("label")) or "").strip().casefold().endswith(" information")
                             and (s.findtext(Q("label")) or "").strip().casefold() not in {"system information", "additional information"}]
+    if section_id is not None:
+        candidates = [s for index, s in enumerate(sections) if str(index) == section_id]
     if len(candidates) != 1:
         raise ValueError("Layout must have one identifiable Information section; no section was changed. Rename/select the intended section before deploying.")
     section = candidates[0]
@@ -126,7 +129,18 @@ class PageLayoutService:
             raise RuntimeError("Salesforce layout retrieval failed: " + str(data.get("message") or data.get("result") or result.stderr))
         return data.get("result")
 
-    def _retrieve(self, root):
+    def _retrieve(self, root, objects=None):
+        from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+        config=json.loads((root/'sfdx-project.json').read_text(encoding='utf-8'))
+        api=owned_metadata_api(self.target_org,config.get('sourceApiVersion'))
+        if api:
+            members={}
+            for kind in ('Layout','RecordType'):
+                rows=api.list_metadata(kind)
+                members[kind]=sorted({r['fullName'] for r in rows if objects is None or any(r['fullName'].startswith(obj+('-' if kind=='Layout' else '.')) for obj in objects)})
+            members['Profile']=['Admin']
+            api.retrieve_layouts(members,root)
+            return ET.parse(root/PROFILE_PATH).getroot(),set(members['Layout'])
         # Retrieve all layout assignments, but NEVER deploy all retrieved files.
         # RecordTypes and Layouts must accompany Profile in the same retrieve.
         members = {}
@@ -134,7 +148,7 @@ class PageLayoutService:
             records = self._cli(root, ["org", "list", "metadata", "--metadata-type", kind])
             if not isinstance(records, list):
                 raise RuntimeError(f"Unexpected {kind} discovery response.")
-            members[kind] = sorted({r["fullName"] for r in records})
+            members[kind] = sorted({r["fullName"] for r in records if objects is None or any(r["fullName"].startswith(obj + ("-" if kind == "Layout" else ".")) for obj in objects)})
         members["Profile"] = ["Admin"]
         package = ET.Element(Q("Package"))
         for kind, names in members.items():
@@ -158,7 +172,7 @@ class PageLayoutService:
             raise RuntimeError("Salesforce did not return the Admin profile.")
         return ET.parse(profile).getroot(), set(members["Layout"])
 
-    def generate(self, specification):
+    def generate(self, specification, selections=None):
         fields = {}
         new_objects = set()
         for item in specification.metadata:
@@ -175,13 +189,18 @@ class PageLayoutService:
                 if field.tag != Q("CustomField") or field.findtext(Q("fullName")) != name or not field.findtext(Q("type")):
                     raise ValueError(f"Invalid generated field: {item.fullName}")
                 fields.setdefault(object_name, []).append((name, field))
-        report = {"profile": "Admin", "section": "Information", "layouts": [], "generatedFiles": []}
+        report = {"profile": "Admin", "section": "Selected per layout" if selections is not None else "Information", "layouts": [], "generatedFiles": []}
         if not fields:
             return report
         with tempfile.TemporaryDirectory(prefix="salesforce-layout-retrieve-", ignore_cleanup_errors=True) as directory:
             retrieval = Path(directory)
             initialize_deployment_project(self.project_root, retrieval)
-            profile, known_layouts = self._retrieve(retrieval)
+            if set(fields)<=new_objects:
+                # There are no existing layout assignments for CREATE-only objects.
+                # Emit only new assignments; existing Admin assignments remain untouched.
+                profile,known_layouts=ET.Element(Q('Profile')),set()
+            else:
+                profile, known_layouts = self._retrieve(retrieval, objects=set(fields) - new_objects)
             if profile.tag != Q("Profile"):
                 raise ValueError("Retrieved Admin XML is not a Profile.")
             assignments = [deepcopy(a) for a in profile.findall(Q("layoutAssignments"))]
@@ -189,24 +208,48 @@ class PageLayoutService:
                 object_layouts = {n for n in known_layouts if n.startswith(object_name + "-")}
                 created = object_name in new_objects and not object_layouts
                 if created:
-                    name = f"{object_name}-{object_name} Layout"
+                    # Object API suffix belongs before the hyphen, not in the
+                    # layout name where double underscores imply a namespace.
+                    layout_label = object_name.removesuffix("__c").replace("__", "_")
+                    name = f"{object_name}-{layout_label} Layout"
                     layout = new_layout(ET.parse(self.project_root / component_path("CustomObject", object_name)).getroot())
                     assignment = ET.Element(Q("layoutAssignments"))
                     ET.SubElement(assignment, Q("layout")).text = name
                     assignments.append(assignment)
+                    selected = [{"fullName": name, "sectionId": "0"}]
                 else:
-                    name = select_default_layout(profile, object_name)
-                    source = retrieval / layout_path(name)
-                    if name not in known_layouts or not source.is_file():
-                        raise ValueError(f"Assigned layout was not retrieved: {name}")
-                    layout = ET.parse(source).getroot()
-                added, skipped = add_fields(layout, roots)
-                relative = layout_path(name)
-                write_xml(layout, self.project_root / relative)
-                report["generatedFiles"].append(relative.as_posix())
-                report["layouts"].append({"fullName": name, "object": object_name, "created": created, "addedFields": added, "alreadyPresent": skipped})
+                    if selections is None:
+                        if len(object_layouts) != 1:
+                            raise ValueError(f"Select layouts for {object_name} before deployment.")
+                        selected = [{"fullName": next(iter(object_layouts))}]
+                    else:
+                        selected = selections.get(object_name, [])
+                        if not selected:
+                            raise ValueError(f"No approved layout selection for {object_name}.")
+                for choice in selected:
+                    name = choice["fullName"]
+                    if not created:
+                        if choice.get("created"):
+                            raise ValueError(f"Layout availability changed for {object_name}; review a new plan.")
+                        source = retrieval / layout_path(name)
+                        if name not in object_layouts or not source.is_file():
+                            raise ValueError(f"Selected layout was not retrieved: {name}")
+                        layout = ET.parse(source).getroot()
+                        if choice.get("fingerprint"):
+                            from Backend.AI.app.services.layout_selection_service import layout_fingerprint
+                            if layout_fingerprint(layout) != choice["fingerprint"]:
+                                raise ValueError(f"Layout changed since review: {name}. Create a new plan and review layout options again.")
+                    elif selections is not None:
+                        expected = selections.get(object_name, [])
+                        if len(expected) != 1 or expected[0]["fullName"] != name or not expected[0].get("created"):
+                            raise ValueError(f"Layout availability changed for {object_name}; review a new plan.")
+                    added, skipped = add_fields(layout, roots, choice.get("sectionId"))
+                    relative = layout_path(name)
+                    write_xml(layout, safe_source_target(self.project_root, relative.as_posix()))
+                    report["generatedFiles"].append(relative.as_posix())
+                    report["layouts"].append({"fullName": name, "object": object_name, "created": created, "sectionId": choice.get("sectionId"), "addedFields": added, "alreadyPresent": skipped})
             # Preserve every retrieved assignment, but no unrelated permissions.
-            profile_path = self.project_root / PROFILE_PATH
+            profile_path = safe_source_target(self.project_root, PROFILE_PATH.as_posix())
             overlay = ET.parse(profile_path).getroot() if profile_path.exists() else ET.Element(Q("Profile"))
             if any(child.tag != Q("fieldPermissions") for child in overlay):
                 raise ValueError("Expected a fresh FLS-only Admin overlay before layout generation.")

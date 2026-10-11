@@ -1,27 +1,14 @@
 """Build a narrow System Administrator profile overlay for CREATE fields."""
 from pathlib import Path
 import json
-import re
 import xml.etree.ElementTree as ET
 
 NS = "http://soap.sforce.com/2006/04/metadata"
-API_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
+from Backend.AI.app.services.metadata_safety import API_NAME
 ET.register_namespace("", NS)
 
 
-def component_path(metadata_type, full_name):
-    """Resolve only supported components; reject traversal before generation."""
-    parts = full_name.split(".")
-    expected = 1 if metadata_type == "CustomObject" else 2
-    if metadata_type not in {"CustomObject", "CustomField", "ValidationRule"}:
-        raise ValueError(f"Unsupported CREATE metadata type: {metadata_type}")
-    if len(parts) != expected or any(not API_NAME.fullmatch(p) for p in parts):
-        raise ValueError(f"Invalid {metadata_type} fullName: {full_name}")
-    base = Path("force-app/main/default/objects") / parts[0]
-    if metadata_type == "CustomObject":
-        return base / f"{parts[0]}.object-meta.xml"
-    folder, suffix = ("fields", "field-meta.xml") if metadata_type == "CustomField" else ("validationRules", "validationRule-meta.xml")
-    return base / folder / f"{parts[1]}.{suffix}"
+from Backend.AI.app.services.metadata_safety import component_path
 
 
 def validate_create_specification(plan, specification):
@@ -30,6 +17,8 @@ def validate_create_specification(plan, specification):
         raise ValueError("An approved plan and matching metadata specification are required.")
     if specification.validationIssues:
         raise ValueError("Metadata specification contains validation issues.")
+    from Backend.AI.app.validators.flow_validator import validate_flow_spec_matches_plan
+    validate_flow_spec_matches_plan(plan, specification)
     expected = {}
     for item in plan.items:
         if item.action != "CREATE":
@@ -107,7 +96,8 @@ class SystemAdministratorFLSService:
                 val = entry[key]
                 ET.SubElement(permission, f"{{{NS}}}{key}").text = str(val).lower() if isinstance(val, bool) else val
         relative = Path("force-app/main/default/profiles/Admin.profile-meta.xml")
-        path = self.project_root / relative
+        from Backend.AI.app.services.metadata_safety import safe_source_target
+        path = safe_source_target(self.project_root, relative.as_posix())
         path.parent.mkdir(parents=True, exist_ok=True)
         ET.indent(profile, space="    ")
         ET.ElementTree(profile).write(path, encoding="utf-8", xml_declaration=True)

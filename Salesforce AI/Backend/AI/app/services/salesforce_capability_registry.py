@@ -436,10 +436,14 @@ class SalesforceCapabilityRegistry:
         "Url",
     }
 
+    # Flow and Apex support the contracts enforced by their validators.
     EXECUTABLE_METADATA_TYPES = {
+        "Flow",
         "CustomObject",
         "CustomField",
         "ValidationRule",
+        "ApexClass",
+        "ApexTrigger",
     }
 
     # =====================================================

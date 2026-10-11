@@ -4,7 +4,6 @@ import {
   Check,
   ChevronDown,
   Cloud,
-  Plus,
 } from "lucide-react";
 
 import { useOrg } from "../../context/OrgContext";
@@ -53,7 +52,6 @@ function OrgSelector() {
       ref={selectorRef}
       className="relative"
     >
-      {/* Selector */}
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -65,7 +63,7 @@ function OrgSelector() {
 
         <div className="hidden text-left md:block">
           <p className="max-w-[150px] truncate text-[11px] font-semibold text-slate-800 dark:text-zinc-100">
-            {activeOrg?.name || "No organization"}
+            {activeOrg && /^00D[A-Za-z0-9]+$/.test(activeOrg.name || "") ? activeOrg.username : activeOrg?.name || "No organization"}
           </p>
 
           <p className="text-[9px] text-slate-400 dark:text-zinc-500">
@@ -81,11 +79,8 @@ function OrgSelector() {
         />
       </button>
 
-      {/* Dropdown */}
       {open && (
         <div className="absolute left-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-zinc-800 dark:bg-zinc-950">
-
-          {/* Header */}
           <div className="border-b border-slate-100 px-4 py-3 dark:border-zinc-800">
             <p className="text-xs font-semibold text-slate-900 dark:text-white">
               Salesforce Organizations
@@ -96,8 +91,8 @@ function OrgSelector() {
             </p>
           </div>
 
-          {/* Organizations */}
           <div className="p-1.5">
+            <a href="/settings#salesforce" className="block p-3 text-xs text-blue-600">Connect a Salesforce org</a>
             {organizations.map((org) => {
               const isSelected =
                 activeOrg?.id === org.id;
@@ -119,7 +114,7 @@ function OrgSelector() {
 
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium text-slate-800 dark:text-zinc-200">
-                      {org.name}
+                      {/^00D[A-Za-z0-9]+$/.test(org.name || "") ? org.username : org.name}
                     </p>
 
                     <div className="mt-0.5 flex items-center gap-2">
@@ -127,8 +122,8 @@ function OrgSelector() {
                         {org.type}
                       </span>
 
-                      <span className="flex items-center gap-1 text-[9px] text-emerald-500">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                      <span className="flex items-center gap-1 text-[9px] text-slate-500">
+                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
                         {org.status}
                       </span>
                     </div>
@@ -145,21 +140,9 @@ function OrgSelector() {
             })}
           </div>
 
-          {/* Connect */}
-          <div className="border-t border-slate-100 p-1.5 dark:border-zinc-800">
-            <button
-              type="button"
-              onClick={() =>
-                console.log(
-                  "Connect Salesforce Organization"
-                )
-              }
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-xs font-medium text-blue-500 transition hover:bg-blue-50 dark:hover:bg-blue-500/10"
-            >
-              <Plus size={15} />
-              Connect Salesforce Organization
-            </button>
-          </div>
+          <p className="border-t border-slate-100 p-3 text-[10px] text-slate-400 dark:border-zinc-800">
+            Connections authorized through Salesforce OAuth.
+          </p>
         </div>
       )}
     </div>

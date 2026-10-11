@@ -19,7 +19,10 @@ def get_ai_provider() -> AIProvider:
         anthropic
     """
 
-    provider_name = os.getenv(
+    from Backend.AI.app.account_api import current_account
+    from Backend.AI.app.services.integration_service import ai_settings
+    settings=ai_settings(current_account.get())
+    provider_name = settings.get('provider') or os.getenv(
         "AI_PROVIDER",
         "mock",
     ).lower()
@@ -28,7 +31,7 @@ def get_ai_provider() -> AIProvider:
         return MockProvider()
 
     if provider_name == "anthropic":
-        return AnthropicProvider()
+        return AnthropicProvider(api_key=settings.get('api_key'),model=settings.get('model'))
 
     raise ValueError(
         f"Unsupported AI provider: {provider_name}"

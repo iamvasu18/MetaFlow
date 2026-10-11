@@ -105,7 +105,36 @@
         "deployment": {
           "type": "object"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "metadataType": {
+                "const": "Flow"
+              },
+              "action": {
+                "const": "CREATE"
+              }
+            },
+            "required": [
+              "metadataType",
+              "action"
+            ]
+          },
+          "then": {
+            "required": [
+              "label",
+              "config"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "flow-config-v001.json"
+              }
+            }
+          }
+        }
+      ]
     }
   }
 }

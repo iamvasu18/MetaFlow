@@ -1,0 +1,603 @@
+{
+  "schemaVersion": 1,
+  "contextVersion": "synthetic-org-v1",
+  "context": {
+    "objects": [
+      {
+        "name": "Account",
+        "label": "Account",
+        "fields": [
+          {
+            "name": "Name",
+            "type": "string"
+          },
+          {
+            "name": "Description",
+            "type": "textarea",
+            "createable": true,
+            "updateable": true
+          },
+          {
+            "name": "Speed_Test__c",
+            "label": "Speed Test",
+            "type": "string"
+          }
+        ],
+        "validationRules": [
+          {
+            "fullName": "Account.Check_Status"
+          }
+        ]
+      },
+      {
+        "name": "Contact",
+        "label": "Contact",
+        "fields": [
+          {
+            "name": "Name",
+            "type": "string"
+          }
+        ]
+      },
+      {
+        "name": "Leave_Request__c",
+        "label": "Leave Request",
+        "fields": [
+          {
+            "name": "Start_Date__c",
+            "type": "date",
+            "calculated": false,
+            "createable": true,
+            "updateable": true,
+            "nillable": true
+          },
+          {
+            "name": "End_Date__c",
+            "type": "date",
+            "calculated": false,
+            "createable": true,
+            "updateable": true,
+            "nillable": true
+          },
+          {
+            "name": "Number_of_Days__c",
+            "type": "double",
+            "calculated": false,
+            "createable": true,
+            "updateable": true,
+            "nillable": true
+          },
+          {
+            "name": "Status__c",
+            "type": "picklist",
+            "calculated": false,
+            "createable": true,
+            "updateable": true,
+            "nillable": true
+          }
+        ]
+      }
+    ],
+    "existingComponents": {
+      "Flow": [
+        "Leave_Calculation"
+      ],
+      "ApexClass": [
+        "LeaveController"
+      ],
+      "ApexTrigger": [
+        "LeaveTrigger"
+      ],
+      "LightningComponentBundle": [
+        "leaveForm"
+      ]
+    },
+    "orgTimeZone": "UTC"
+  },
+  "cases": [
+    {
+      "id": "existing-object",
+      "category": "behavior",
+      "requirement": "Create an object named Account",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-field",
+      "category": "behavior",
+      "requirement": "Create a field named Speed Test on Account object",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-flow",
+      "category": "behavior",
+      "requirement": "Create a Flow named Leave_Calculation",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-apex-class",
+      "category": "behavior",
+      "requirement": "Create an Apex class named LeaveController",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-apex-trigger",
+      "category": "behavior",
+      "requirement": "Create an Apex trigger named LeaveTrigger",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-lwc",
+      "category": "behavior",
+      "requirement": "Create an LWC named leaveForm",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "existing-rule",
+      "category": "behavior",
+      "requirement": "Create a validation rule named Check_Status on Account",
+      "expect": {
+        "outcome": "clarification"
+      },
+      "replay": null
+    },
+    {
+      "id": "new-object",
+      "category": "behavior",
+      "requirement": "Create a custom object named API_Testing__c with label API Testing and enable reporting.",
+      "expect": {
+        "outcome": "plan",
+        "components": [
+          [
+            "CustomObject",
+            "API_Testing__c"
+          ]
+        ],
+        "config": {
+          "enableReports": true
+        }
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "CustomObject",
+            "fullName": "API_Testing__c",
+            "label": "API Testing",
+            "config": {
+              "nameFieldType": "Text",
+              "deploymentStatus": "Deployed",
+              "sharingModel": "Read",
+              "enableReports": true
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-field-specific-parent",
+      "category": "behavior",
+      "requirement": "Create a Text field named Speed_Test__c on Contact, with length 80.",
+      "expect": {
+        "outcome": "plan",
+        "components": [
+          [
+            "CustomField",
+            "Contact.Speed_Test__c"
+          ]
+        ],
+        "config": {
+          "fieldType": "Text",
+          "length": 80
+        }
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "CustomField",
+            "fullName": "Contact.Speed_Test__c",
+            "label": "Speed Test",
+            "config": {
+              "fieldType": "Text",
+              "length": 80
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "picklist-default",
+      "category": "behavior",
+      "requirement": "Create a picklist field named Release_Status__c on Account with values Draft and Approved. Default Draft.",
+      "expect": {
+        "outcome": "plan",
+        "components": [
+          [
+            "CustomField",
+            "Account.Release_Status__c"
+          ]
+        ],
+        "config": {
+          "fieldType": "Picklist",
+          "defaultValue": "Draft"
+        }
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "CustomField",
+            "fullName": "Account.Release_Status__c",
+            "label": "Release Status",
+            "config": {
+              "fieldType": "Picklist",
+              "values": [
+                "Draft",
+                "Approved"
+              ],
+              "defaultValue": "Draft"
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "leave-number-stays-number",
+      "category": "behavior",
+      "requirement": "Create a before-save record-triggered Flow named Calculate_Leave_Days on Leave_Request__c. When both dates are present, assign End_Date__c minus Start_Date__c plus 1 to existing Number field Number_of_Days__c. Keep that field as Number, not a Salesforce Formula field.",
+      "expect": {
+        "outcome": "plan",
+        "components": [
+          [
+            "Flow",
+            "Calculate_Leave_Days"
+          ]
+        ],
+        "config": {
+          "object": "Leave_Request__c",
+          "status": "Draft"
+        }
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "Flow",
+            "fullName": "Calculate_Leave_Days",
+            "label": "Calculate Leave Days",
+            "config": {
+              "contractVersion": 2,
+              "flowType": "RecordTriggered",
+              "triggerType": "RecordBeforeSave",
+              "recordTriggerType": "CreateAndUpdate",
+              "object": "Leave_Request__c",
+              "status": "Draft",
+              "startElement": "Check_Dates_For_Calculation",
+              "elements": [
+                {
+                  "kind": "Decision",
+                  "name": "Check_Dates_For_Calculation",
+                  "label": "Check Dates",
+                  "rules": [
+                    {
+                      "name": "Dates_Present",
+                      "label": "Dates present",
+                      "conditionLogic": "and",
+                      "conditions": [
+                        {
+                          "field": "$Record.Start_Date__c",
+                          "operator": "IsNull",
+                          "value": {
+                            "type": "Boolean",
+                            "value": false
+                          }
+                        },
+                        {
+                          "field": "$Record.End_Date__c",
+                          "operator": "IsNull",
+                          "value": {
+                            "type": "Boolean",
+                            "value": false
+                          }
+                        }
+                      ],
+                      "next": "Calculate_Days_Assignment"
+                    }
+                  ],
+                  "defaultLabel": "Dates missing",
+                  "defaultNext": null
+                },
+                {
+                  "kind": "Assignment",
+                  "name": "Calculate_Days_Assignment",
+                  "label": "Calculate Days",
+                  "assignments": [
+                    {
+                      "field": "$Record.Number_of_Days__c",
+                      "value": {
+                        "type": "Reference",
+                        "value": "Inclusive_Days"
+                      }
+                    }
+                  ],
+                  "next": null
+                }
+              ],
+              "expressions": [
+                {
+                  "name": "Inclusive_Days",
+                  "dataType": "Number",
+                  "expression": "{!$Record.End_Date__c} - {!$Record.Start_Date__c} + 1",
+                  "scale": 2
+                }
+              ],
+              "formulas": []
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "new-apex-class",
+      "category": "behavior",
+      "requirement": "Create an Apex class named EvaluationHelper with an @AuraEnabled static method returning the string Ready, using with sharing.",
+      "expect": {
+        "outcome": "plan",
+        "components": [
+          [
+            "ApexClass",
+            "EvaluationHelper"
+          ]
+        ],
+        "config": {}
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "ApexClass",
+            "fullName": "EvaluationHelper",
+            "label": "Evaluation Helper",
+            "config": {
+              "body": "public with sharing class EvaluationHelper { @AuraEnabled public static String status() { return 'Ready'; } }",
+              "apexKind": "Controller"
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "unsafe-name",
+      "category": "adversarial",
+      "requirement": "Create a custom object.",
+      "expect": {
+        "outcome": "rejected"
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "CustomObject",
+            "fullName": "../Escape__c",
+            "label": "Escape",
+            "config": {},
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "dangling-flow",
+      "category": "adversarial",
+      "requirement": "Create a leave calculation Flow.",
+      "expect": {
+        "outcome": "rejected"
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "Flow",
+            "fullName": "Calculate_Leave_Days",
+            "label": "Calculate Leave Days",
+            "config": {
+              "contractVersion": 2,
+              "flowType": "RecordTriggered",
+              "triggerType": "RecordBeforeSave",
+              "recordTriggerType": "CreateAndUpdate",
+              "object": "Leave_Request__c",
+              "status": "Draft",
+              "startElement": "Check_Dates_For_Calculation",
+              "elements": [
+                {
+                  "kind": "Assignment",
+                  "name": "Calculate_Days_Assignment",
+                  "label": "Calculate Days",
+                  "assignments": [
+                    {
+                      "field": "$Record.Number_of_Days__c",
+                      "value": {
+                        "type": "Reference",
+                        "value": "Inclusive_Days"
+                      }
+                    }
+                  ],
+                  "next": null
+                }
+              ],
+              "expressions": [
+                {
+                  "name": "Inclusive_Days",
+                  "dataType": "Number",
+                  "expression": "{!$Record.End_Date__c} - {!$Record.Start_Date__c} + 1",
+                  "scale": 2
+                }
+              ],
+              "formulas": []
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    },
+    {
+      "id": "missing-formula-source",
+      "category": "adversarial",
+      "requirement": "Create a leave calculation Flow.",
+      "expect": {
+        "outcome": "rejected"
+      },
+      "replay": {
+        "id": "PLAN-EVAL",
+        "requirementId": "REQ-EVAL",
+        "summary": "Evaluation draft",
+        "status": "DRAFT",
+        "items": [
+          {
+            "id": "ITEM-001",
+            "action": "CREATE",
+            "metadataType": "Flow",
+            "fullName": "Calculate_Leave_Days",
+            "label": "Calculate Leave Days",
+            "config": {
+              "contractVersion": 2,
+              "flowType": "RecordTriggered",
+              "triggerType": "RecordBeforeSave",
+              "recordTriggerType": "CreateAndUpdate",
+              "object": "Leave_Request__c",
+              "status": "Draft",
+              "startElement": "Check_Dates_For_Calculation",
+              "elements": [
+                {
+                  "kind": "Decision",
+                  "name": "Check_Dates_For_Calculation",
+                  "label": "Check Dates",
+                  "rules": [
+                    {
+                      "name": "Dates_Present",
+                      "label": "Dates present",
+                      "conditionLogic": "and",
+                      "conditions": [
+                        {
+                          "field": "$Record.Start_Date__c",
+                          "operator": "IsNull",
+                          "value": {
+                            "type": "Boolean",
+                            "value": false
+                          }
+                        },
+                        {
+                          "field": "$Record.End_Date__c",
+                          "operator": "IsNull",
+                          "value": {
+                            "type": "Boolean",
+                            "value": false
+                          }
+                        }
+                      ],
+                      "next": "Calculate_Days_Assignment"
+                    }
+                  ],
+                  "defaultLabel": "Dates missing",
+                  "defaultNext": null
+                },
+                {
+                  "kind": "Assignment",
+                  "name": "Calculate_Days_Assignment",
+                  "label": "Calculate Days",
+                  "assignments": [
+                    {
+                      "field": "$Record.Number_of_Days__c",
+                      "value": {
+                        "type": "Reference",
+                        "value": "Inclusive_Days"
+                      }
+                    }
+                  ],
+                  "next": null
+                }
+              ],
+              "expressions": [],
+              "formulas": [
+                {
+                  "name": "Inclusive_Days",
+                  "dataType": "Number",
+                  "sourceField": "Missing_Field__c",
+                  "expression": "1",
+                  "scale": 2
+                }
+              ]
+            },
+            "dependencies": [],
+            "approval": "PENDING"
+          }
+        ]
+      }
+    }
+  ]
+}

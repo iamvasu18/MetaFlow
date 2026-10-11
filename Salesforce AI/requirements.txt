@@ -4,3 +4,9 @@ pydantic
 pytest
 python-dotenv
 uvicorn
+anthropic
+tzdata
+cryptography
+
+psycopg[binary]>=3.2,<4
+redis>=5,<7

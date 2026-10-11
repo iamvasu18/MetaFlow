@@ -61,6 +61,7 @@ class SalesforceMetadataValidator:
 
         errors = []
         validated_files = []
+        warnings = []
 
         for item in plan.items:
 
@@ -85,20 +86,56 @@ class SalesforceMetadataValidator:
 
                 continue
 
-            try:
-
-                ET.parse(
-                    expected_file
+            if item.metadataType in {"ApexClass", "ApexTrigger"}:
+                from Backend.AI.app.services.apex_validator import validate_apex_source
+                config = dict(item.config or {})
+                config["body"] = expected_file.read_text(encoding="utf-8")
+                apex_errors, _apex_warnings = validate_apex_source(
+                    item.metadataType, item.fullName, config
                 )
-
-            except ET.ParseError as exc:
-
-                errors.append(
-                    f"Invalid XML in "
-                    f"{expected_file}: {exc}"
+                warnings.extend(f'{item.fullName}: {warning}' for warning in _apex_warnings)
+                meta_suffix = ".cls-meta.xml" if item.metadataType == "ApexClass" else ".trigger-meta.xml"
+                meta_file = expected_file.with_name(expected_file.stem + meta_suffix)
+                if not meta_file.exists():
+                    errors.append(f"Apex metadata file does not exist: {meta_file}")
+                    continue
+                try:
+                    root = ET.parse(meta_file).getroot()
+                    ns = 'http://soap.sforce.com/2006/04/metadata'
+                    if root.tag != '{'+ns+'}'+item.metadataType or root.findtext('{'+ns+'}status') != 'Active':
+                        errors.append(f'Invalid Apex metadata root/status: {meta_file}')
+                        continue
+                    from Backend.AI.app.services.apex_generator import _api_version
+                    if root.findtext('{'+ns+'}apiVersion') != _api_version(self.project_root):
+                        errors.append(f'Apex metadata API version differs from project: {meta_file}')
+                        continue
+                except ET.ParseError as exc:
+                    errors.append(f"Invalid XML in {meta_file}: {exc}")
+                    continue
+                errors.extend(
+                    f"{item.metadataType} {item.fullName}: {message}"
+                    for message in apex_errors
                 )
+                if apex_errors:
+                    continue
 
-                continue
+            else:
+                try:
+                    ET.parse(expected_file)
+                except ET.ParseError as exc:
+                    errors.append(
+                        f"Invalid XML in "
+                        f"{expected_file}: {exc}"
+                    )
+                    continue
+
+            if item.metadataType == "Flow":
+                from Backend.AI.app.services.flow_generator import validate_flow_artifact
+                try:
+                    validate_flow_artifact(expected_file, item, self.project_root)
+                except ValueError as exc:
+                    errors.append(str(exc))
+                    continue
 
             validated_files.append(
                 str(expected_file)
@@ -110,6 +147,7 @@ class SalesforceMetadataValidator:
             "status": plan.status,
             "validatedFiles": validated_files,
             "errors": errors,
+            "warnings": warnings,
         }
 
     def _expected_file_path(
@@ -120,6 +158,10 @@ class SalesforceMetadataValidator:
         Determine the expected Salesforce DX metadata
         file for a plan item.
         """
+
+        if item.metadataType in {"Flow", "ValidationRule", "ApexClass", "ApexTrigger"}:
+            from Backend.AI.app.services.profile_fls_service import component_path
+            return self.project_root / component_path(item.metadataType, item.fullName)
 
         if item.metadataType == "CustomObject":
 
