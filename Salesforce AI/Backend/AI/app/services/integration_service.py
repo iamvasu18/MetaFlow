@@ -47,22 +47,33 @@ def save_settings(user_id,kind,value):
 
 def ai_settings(user_id=None):
     saved=load_settings(user_id,'ai') if user_id else None
-    return saved or {'provider':os.getenv('AI_PROVIDER','mock').lower(),'model':os.getenv('ANTHROPIC_MODEL',''),'api_key':os.getenv('ANTHROPIC_API_KEY',''),'source':'server'}
+    provider=os.getenv('AI_PROVIDER','mock').lower()
+    prefix={'anthropic':'ANTHROPIC','openai':'OPENAI','gemini':'GEMINI'}.get(provider,'ANTHROPIC')
+    return saved or {'provider':provider,'model':os.getenv(prefix+'_MODEL',''),'api_key':os.getenv(prefix+'_API_KEY',''),'source':'server'}
 
 
-def verify_ai(user_id,api_key,model):
-    import anthropic
+def verify_ai(user_id,api_key,model,provider='anthropic'):
+    if provider not in {'anthropic','openai','gemini'}:raise HTTPException(422,'Choose Claude, OpenAI or Gemini.')
     current=ai_settings(user_id)
-    key=api_key.strip() or current.get('api_key','')
-    if not key or not model.strip():raise HTTPException(422,'Provide an Anthropic API key and model ID.')
+    key=api_key.strip() or (current.get('api_key','') if current.get('provider')==provider else '')
+    model=model.strip()
+    if not key or not model:raise HTTPException(422,'Provide a key for the selected provider and a model ID.')
+    if provider=='gemini':model=model.removeprefix('models/')
     try:
-        client=anthropic.Anthropic(api_key=key,timeout=20,max_retries=0)
-        supported=[entry.id for entry in client.models.list()]
+        if provider=='anthropic':
+            import anthropic
+            client=anthropic.Anthropic(api_key=key,timeout=20,max_retries=0)
+            supported=[entry.id for entry in client.models.list()]
+            if model not in supported:raise HTTPException(422,'Model is not available to this API key.')
+        else:
+            from Backend.AI.app.providers.rest_provider import RestProvider
+            RestProvider(provider,key,model,max_tokens=1024).generate('Reply with the single word OK.','Connection verification.')
+    except HTTPException:raise
+    except (RuntimeError,ValueError) as error:
+        raise HTTPException(422,str(error)) from None
     except Exception:
-        raise HTTPException(502,'Anthropic verification failed. Check the API key, network and account access.') from None
-    if model.strip() not in supported:
-        raise HTTPException(422,'Model is not available to this API key. Available IDs: '+', '.join(supported[:30]))
-    settings={'provider':'anthropic','api_key':key,'model':model.strip(),'verifiedAt':time.time(),'source':'account'}
+        raise HTTPException(502,'Provider verification failed. Check key, model access, billing and connectivity.') from None
+    settings={'provider':provider,'api_key':key,'model':model,'verifiedAt':time.time(),'source':'account'}
     save_settings(user_id,'ai',settings)
     return public_ai(settings)
 

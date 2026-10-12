@@ -30,9 +30,12 @@ def get_ai_provider() -> AIProvider:
     if provider_name == "mock":
         return MockProvider()
 
-    if provider_name == "anthropic":
-        return AnthropicProvider(api_key=settings.get('api_key'),model=settings.get('model'))
+    if provider_name in {"anthropic", "openai", "gemini"}:
+        if not settings.get("api_key") or not settings.get("model"):
+            raise ValueError("Configure your API key and model in Settings → AI provider before sending AI requests.")
+        if provider_name == "anthropic":
+            return AnthropicProvider(api_key=settings['api_key'],model=settings['model'])
+        from Backend.AI.app.providers.rest_provider import RestProvider
+        return RestProvider(provider_name,settings['api_key'],settings['model'])
 
-    raise ValueError(
-        f"Unsupported AI provider: {provider_name}"
-    )
+    raise ValueError(f"Unsupported AI provider: {provider_name}")

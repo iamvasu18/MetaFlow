@@ -14,6 +14,7 @@ load_dotenv(dotenv_path=ENV_FILE, encoding='utf-8-sig', override=False)
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from Backend.AI.app.services.oauth_connection import OAuthConnectionInput, connection_config, encrypt_config, decrypt_config
 
 intelligence_lock = Lock()
 current_org = ContextVar('current_org', default=None)
@@ -55,6 +56,7 @@ SCHEMA = """
     CREATE TABLE IF NOT EXISTS org_intelligence_history(org_id TEXT,user_id TEXT,bucket INTEGER,created REAL,api_used REAL,api_limit REAL,PRIMARY KEY(org_id,user_id,bucket));
     CREATE TABLE IF NOT EXISTS org_identity(org_id TEXT PRIMARY KEY,salesforce_id TEXT);
     CREATE TABLE IF NOT EXISTS org_health(org_id TEXT PRIMARY KEY,status TEXT,checked REAL,message TEXT);
+    CREATE TABLE IF NOT EXISTS oauth_clients(state TEXT PRIMARY KEY,user_id TEXT NOT NULL,payload TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS oauth_reconnect(state TEXT PRIMARY KEY,org_id TEXT);
     CREATE TABLE IF NOT EXISTS attempts(key TEXT PRIMARY KEY,count INTEGER,expires REAL);
     CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,user_id TEXT,org_id TEXT);
@@ -285,31 +287,45 @@ def callback():
     return value
 
 @router.post('/orgs/connect')
-def connect(request:Request,environment:str='production',reconnect_id:str=''):
-    check_origin(request);u=user(request);cid=client();redirect_uri=callback()
+async def connect(request:Request,environment:str='production',reconnect_id:str=''):
+    check_origin(request);u=user(request);redirect_uri=callback();config=None;body=None
+    raw=await request.body()
+    if len(raw)>4096:raise HTTPException(413,'Connection configuration is too large.')
+    if raw:
+        try:body=OAuthConnectionInput.model_validate_json(raw)
+        except ValueError:raise HTTPException(422,'Provide Consumer Key, Consumer Secret, Salesforce org URL and username. Extra fields are not accepted.') from None
     if reconnect_id:
         _,existing=owned_org(request,reconnect_id)
         environment='sandbox' if existing['type']=='Sandbox' else 'production'
+        if body is None:
+            from Backend.AI.app.services.salesforce_api_client import load_org_tokens
+            config=load_org_tokens(u['id'],reconnect_id).get('oauth_client')
     if environment not in ('production','sandbox'):raise HTTPException(422,'Choose production or sandbox.')
-    host='https://test.salesforce.com' if environment=='sandbox' else 'https://login.salesforce.com'
+    if body is not None:config=connection_config(body,environment)
+    cid=config['client_id'] if config else client()
+    host=config['auth_host'] if config else ('https://test.salesforce.com' if environment=='sandbox' else 'https://login.salesforce.com')
     state=secrets.token_urlsafe(32);verifier=secrets.token_urlsafe(48)
     challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
     with db() as c:
         c.execute('INSERT INTO oauth VALUES(?,?,?,?,?,?)',(digest(state),u['id'],digest(request.cookies.get('app_session','')),host,verifier,time.time()+600))
+        if config:c.execute('INSERT INTO oauth_clients VALUES(?,?,?)',(digest(state),u['id'],encrypt_config(config)))
+        c.execute('DELETE FROM oauth_clients WHERE state NOT IN (SELECT state FROM oauth WHERE expires>?)',(time.time(),))
         if reconnect_id:c.execute('INSERT INTO oauth_reconnect VALUES(?,?)',(digest(state),reconnect_id))
-    return {'url':host+'/services/oauth2/authorize?'+urlencode({'response_type':'code','client_id':cid,'redirect_uri':redirect_uri,'scope':'openid api refresh_token','state':state,'code_challenge':challenge,'code_challenge_method':'S256','prompt':'login consent'})}
+    return {'url':host+'/services/oauth2/authorize?'+urlencode({'response_type':'code','client_id':cid,'redirect_uri':redirect_uri,'scope':'openid api refresh_token','state':state,'code_challenge':challenge,'code_challenge_method':'S256','prompt':'login consent',**({'login_hint':config['username']} if config else {})})}
 @router.get('/orgs/callback')
 def oauth_callback(request:Request,state:str='',code:str='',error:str=''):
     u=user(request)
     with db() as c:
-        row=c.execute('SELECT * FROM oauth WHERE state=? AND user_id=? AND session=? AND expires>?',(digest(state),u['id'],digest(request.cookies.get('app_session','')),time.time())).fetchone()
+        row=c.execute('DELETE FROM oauth WHERE state=? AND user_id=? AND session=? AND expires>? RETURNING *',(digest(state),u['id'],digest(request.cookies.get('app_session','')),time.time())).fetchone()
         reconnect=c.execute('SELECT org_id FROM oauth_reconnect WHERE state=?',(digest(state),)).fetchone()
-        c.execute('DELETE FROM oauth WHERE state=?',(digest(state),))
-        c.execute('DELETE FROM oauth_reconnect WHERE state=?',(digest(state),))
+        pending=c.execute('SELECT payload FROM oauth_clients WHERE state=? AND user_id=?',(digest(state),u['id'])).fetchone()
+        if row:c.execute('DELETE FROM oauth_clients WHERE state=? AND user_id=?',(digest(state),u['id']))
+        if row:c.execute('DELETE FROM oauth_reconnect WHERE state=?',(digest(state),))
     if not row:raise HTTPException(400,'Connection expired or invalid. Try again.')
     if error or not code:return RedirectResponse('/?connection=cancelled',303)
-    data={'grant_type':'authorization_code','code':code,'client_id':client(),'redirect_uri':callback(),'code_verifier':row['verifier']}
-    secret=os.getenv('SF_OAUTH_CLIENT_SECRET','')
+    config=decrypt_config(pending['payload']) if pending else None
+    data={'grant_type':'authorization_code','code':code,'client_id':config['client_id'] if config else client(),'redirect_uri':callback(),'code_verifier':row['verifier']}
+    secret=config['client_secret'] if config else os.getenv('SF_OAUTH_CLIENT_SECRET','')
     if secret:data['client_secret']=secret
     with httpx.Client(timeout=30,follow_redirects=False) as h:
         result=h.post(row['host']+'/services/oauth2/token',data=data)
@@ -325,6 +341,10 @@ def oauth_callback(request:Request,state:str='',code:str='',error:str=''):
         info=identity.json()
         if not isinstance(info,dict) or not re.fullmatch(r'00D[A-Za-z0-9]{12}(?:[A-Za-z0-9]{3})?',str(info.get('organization_id',''))) or not isinstance(info.get('preferred_username'),str) or not info['preferred_username']:
             raise HTTPException(502,'Salesforce did not return a complete organization and user identity.')
+    if config:
+        if info['preferred_username'].lower()!=config['username'].lower() or tokens['instance_url'].lower()!=config['expected_instance'].lower():
+            raise HTTPException(409,'Authorized Salesforce user or org does not match the entered username and org URL. Start a new connection.')
+        tokens['oauth_client']=config
     alias='app_'+secrets.token_hex(16)
     if reconnect:
         _,existing=owned_org(request,reconnect['org_id'])
@@ -337,7 +357,7 @@ def oauth_callback(request:Request,state:str='',code:str='',error:str=''):
     with db() as c:
         if reconnect and not c.execute('SELECT id FROM orgs WHERE id=? AND user_id=?',(alias,u['id'])).fetchone():
             raise HTTPException(409,'This connection was removed. Start a new connection.')
-        c.execute('INSERT OR REPLACE INTO orgs VALUES(?,?,?,?,?,?)',(alias,u['id'],info.get('organization_id','Salesforce org'),'Sandbox' if row['host'].startswith('https://test.') else 'Production / Developer',info.get('preferred_username',''),tokens['instance_url']))
+        c.execute('INSERT OR REPLACE INTO orgs VALUES(?,?,?,?,?,?)',(alias,u['id'],info.get('organization_id','Salesforce org'),'Sandbox' if (config and config['environment']=='sandbox') or row['host'].startswith('https://test.') else 'Production / Developer',info.get('preferred_username',''),tokens['instance_url']))
         c.execute('INSERT OR REPLACE INTO org_identity VALUES(?,?)',(alias,info.get('organization_id','')))
         c.execute('INSERT OR REPLACE INTO org_health VALUES(?,?,?,?)',(alias,'Connected',time.time(),'Salesforce identity verified during authorization.'))
         from Backend.AI.app.services.salesforce_api_client import encrypt_org_tokens
@@ -525,6 +545,7 @@ def append_conversation_message(request:Request,org_id:str,conversation_id:str,b
 
 
 class AISettingsRequest(BaseModel):
+    provider:Literal['anthropic','openai','gemini']='anthropic'
     api_key:str=Field(default='',max_length=1000)
     model:str=Field(min_length=1,max_length=200)
 
@@ -543,10 +564,14 @@ def integrations(request:Request):
 
 
 @router.post('/integrations/ai')
-def configure_ai(request:Request,settings:AISettingsRequest):
+async def configure_ai(request:Request):
     from .services.integration_service import verify_ai
     check_origin(request);u=user(request)
-    return verify_ai(u['id'],settings.api_key,settings.model)
+    raw=await request.body()
+    if len(raw)>4096:raise HTTPException(413,'AI settings are too large.')
+    try:settings=AISettingsRequest.model_validate_json(raw)
+    except ValueError:raise HTTPException(422,'Provide a supported provider, API key and model ID.') from None
+    return verify_ai(u['id'],settings.api_key,settings.model,settings.provider)
 
 
 @router.post('/integrations/jira')

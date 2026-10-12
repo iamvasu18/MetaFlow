@@ -52,12 +52,13 @@ export default function OrgProvider({ children }) {
       setActiveOrgId(id); remember(user, id);
     }
   }
-  async function connect(environment, reconnectId = '') {
+  async function connect(environment, reconnectId = '', credentials = null) {
     setError('');
+    if (!reconnectId && !credentials) { window.location.assign('/settings#salesforce'); return; }
     try {
       const query = new URLSearchParams({ environment });
       if (reconnectId) query.set('reconnect_id', reconnectId);
-      const data = await apiRequest('default', `/orgs/connect?${query}`, { method: 'POST' });
+      const data = await apiRequest('default', `/orgs/connect?${query}`, { method: 'POST', ...(credentials ? { body: credentials } : {}) });
       window.location.assign(data.url);
     } catch (failure) { setError(failure.message); throw failure; }
   }
