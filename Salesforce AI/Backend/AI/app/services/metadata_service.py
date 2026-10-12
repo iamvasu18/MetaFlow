@@ -116,7 +116,7 @@ class MetadataService:
         # Flow-only conversion uses the already validated plan config.
         # It does not require a second AI generation call.
         flow_only = plan.items and all(
-            item.metadataType == "Flow"
+            item.metadataType in {"Flow", "PermissionSet"}
             and item.action in {"CREATE", "NO_CHANGE"}
             for item in plan.items
         )
@@ -139,7 +139,7 @@ class MetadataService:
                         {
                             "itemId": item.id,
                             "action": "CREATE",
-                            "metadataType": "Flow",
+                            "metadataType": item.metadataType,
                             "fullName": item.fullName,
                             "label": item.label,
                             "description": item.description,
@@ -322,6 +322,7 @@ def load_metadata_generation_context(
 
 
 SUPPORTED = {
+    "PermissionSet",
     "CustomObject",
     "CustomField",
     "ValidationRule",
@@ -331,7 +332,8 @@ SUPPORTED = {
     "LightningComponentBundle",
 }
 
-GUIDANCE = """LWC getObjectInfo/getPicklistValues are wire adapters: use @wire, never imperative calls.
+GUIDANCE = """PermissionSet CREATE is supported with label and strict config objectPermissions, fieldPermissions, classAccesses, userPermissions and optional license. Never add Profile edits or automatic user assignments.
+LWC getObjectInfo/getPicklistValues are wire adapters: use @wire, never imperative calls.
 Respect explicitly requested field types. A Number field populated by a Flow
 is not a Salesforce Formula field. For independent Flow calculations use contractVersion=2
 and config.expressions [{name,dataType,expression,scale}], never formulas.sourceField.
@@ -400,6 +402,7 @@ class PlanningProvider:
         # Appending the full raw context would bypass that reduction.
         # Full discovery metadata remains available to backend validators.
         supplemental = {
+            "permissionSetCapabilities": self.context.get("permissionSetCapabilities"),
             "focusedObjectRequest": self.context.get("focusedObjectRequest"),
             "discoveryScope": self.context.get("discoveryScope"),
             "existingComponents": self.context.get(
@@ -552,6 +555,11 @@ class DefaultMetadataPipeline(ApexAutomationService):
             for field in obj.get('fields',[]) if field.get('name')]
         inventory['ValidationRule']=[rule['fullName'] for obj in context.get('objects',[])
             for rule in obj.get('validationRules',[]) if rule.get('fullName')]
+        if 'PermissionSet' in kinds and api:
+            permission_description = api.describe_object('PermissionSet')
+            context['permissionSetCapabilities'] = {'systemPermissions': sorted(
+                field['name'][len('Permissions'):] for field in permission_description['fields']
+                if field.get('type') == 'boolean' and field.get('name','').startswith('Permissions'))}
         context["existingComponents"] = inventory
         context["objectCatalog"] = [{"name": obj["name"], "label": obj.get("label")} for obj in catalog if obj.get("name")]
 
@@ -592,7 +600,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
         )
 
         missing_inventory={i.metadataType for i in plan.items if i.action!='NO_CHANGE' and
-            i.metadataType in {'ApexClass','ApexTrigger','LightningComponentBundle','Flow'} and
+            i.metadataType in {'ApexClass','ApexTrigger','LightningComponentBundle','Flow','PermissionSet'} and
             i.metadataType not in context.get('existingComponents',{})}
         for kind in sorted(missing_inventory):
             rows=api.list_components(kind) if api else self.cli(['org','list','metadata','--metadata-type',kind,'--target-org',request.target_org]).get('result')
@@ -657,6 +665,11 @@ class DefaultMetadataPipeline(ApexAutomationService):
                     + " already exists. An UPDATE cannot "
                     "be silently treated as CREATE."
                 )
+
+        for permission in active:
+            if permission.metadataType == 'PermissionSet':
+                from Backend.AI.app.services.permission_set_service import preflight_permission_set
+                preflight_permission_set(permission.fullName, permission.label, permission.config, api, plan.model_dump(), context)
 
         files = {}
         components = {}
@@ -731,6 +744,11 @@ class DefaultMetadataPipeline(ApexAutomationService):
                         )
                     ),
                     target_org=request.target_org,
+                    objects=[
+                        obj['name']
+                        for obj in context.get('objects', [])
+                        if obj.get('name')
+                    ],
                 ),
                 provider,
             )
@@ -1018,7 +1036,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
             parents={i['fullName'].split('.')[0] for i in bundle['components'] if i['metadataType'] in {'CustomField','ValidationRule'}} & existing
             context['objects']=[api.describe_object(name) for name in sorted(parents)]
             if 'ValidationRule' in kinds:context=api.enrich_validation_rules(context)
-        for kind in kinds & {'ApexClass','ApexTrigger','Flow','LightningComponentBundle'}:
+        for kind in kinds & {'ApexClass','ApexTrigger','Flow','LightningComponentBundle','PermissionSet'}:
             context['existingComponents'][kind]=[r['fullName'] for r in api.list_components(kind)]
         check_planned_components(bundle['plan'],bundle.get('requirement',''),context)
 
@@ -1176,6 +1194,16 @@ class DefaultMetadataPipeline(ApexAutomationService):
 
         phase=perf_counter()
         self.ensure_new(bundle)
+        # Validate the reviewed XML, including manually edited permissions, against current org facts.
+        from Backend.AI.app.services.permission_set_service import source_config, preflight_permission_set
+        from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+        permission_transport = owned_metadata_api(bundle['targetOrg'], bundle['apiVersion'])
+        for component in bundle['components']:
+            if component['metadataType'] == 'PermissionSet':
+                from Backend.AI.app.services.metadata_safety import component_path
+                label, config = source_config(bundle['files'][component_path('PermissionSet',component['fullName']).as_posix()])
+                preflight_permission_set(component['fullName'], label, config.model_dump(), permission_transport.api if permission_transport else None, bundle['plan'])
+
         logging.getLogger(__name__).warning('Salesforce operation=%s phase=existence-check seconds=%.3f', 'validate' if dry_run else 'deploy',perf_counter()-phase)
 
         plan = ImplementationPlan.model_validate(

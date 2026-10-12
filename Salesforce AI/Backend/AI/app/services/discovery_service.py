@@ -93,6 +93,25 @@ def discover_object(pipeline,org,request,api=None):
     name=request['fullName']
     if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*__c',name):
         raise ValueError('Invalid proposed custom object API name.')
+    # Resolve human labels against the connected org, not a built-in alias map.
+    if api is not None and not request.get('explicitApiName', False):
+        catalog = api.list_objects()
+        if not isinstance(catalog, list):
+            raise ValueError('Object label discovery did not complete. No source was generated.')
+        wanted = request.get('label') or name[:-3].replace('_', ' ')
+        found = [obj for obj in catalog if obj.get('name') and any(
+            _matches(wanted, obj['name'], obj.get(key))
+            for key in ('label', 'labelPlural', 'pluralLabel')
+        )]
+        if found:
+            names = sorted({obj['name'] for obj in found})
+            conflict = ComponentConflict('CustomObject', ', '.join(names))
+            descriptions = sorted({f"{obj.get('label') or obj['name']} (API name {obj['name']})" for obj in found})
+            conflict.question = ('I found existing objects in the connected org: ' + '; '.join(descriptions) +
+                '. Which should we use? Reuse an existing object, describe an explicit change, '
+                'or provide a distinct label and API name ending in __c for a separate custom object. '
+                'No new object has been generated.')
+            raise conflict
     # A human label such as Account must not silently become Account__c.
     # Look up the possible standard API name and proposed custom API separately:
     # EntityDefinition rejects OR expressions. Neither check scans the org.
@@ -120,12 +139,13 @@ def discover_object(pipeline,org,request,api=None):
 
 
 
-INVENTORY_KINDS=('ApexClass','ApexTrigger','LightningComponentBundle','Flow')
+INVENTORY_KINDS=('ApexClass','ApexTrigger','LightningComponentBundle','Flow','PermissionSet')
 
 
 def request_scope(requirement):
     text=requirement.lower()
     kinds=set();known=False;rules=False
+    if re.search(r'\bpermission[- ]?sets?\b',text):kinds.add('PermissionSet');known=True
     if re.search(r'\b(lwc|lightning web component|lightning component)\b',text):
         kinds.update(('LightningComponentBundle','ApexClass'));known=True;rules=True
     if re.search(r'\bapex\b',text):
@@ -150,7 +170,7 @@ def explicit_objects(requirement,catalog):
     for obj in catalog:
         name=obj.get('name')
         if not name:continue
-        candidates=[name,obj.get('label')]
+        candidates=[name,obj.get('label'),obj.get('labelPlural'),obj.get('pluralLabel')]
         if name.endswith('__c'):candidates.append(name[:-3].replace('_',' '))
         matched=False
         for value in candidates:
@@ -181,7 +201,7 @@ _FAMILIES = {
     'object': 'CustomObject', 'field': 'CustomField', 'flow': 'Flow',
     'apex class': 'ApexClass', 'apex trigger': 'ApexTrigger',
     'lwc': 'LightningComponentBundle', 'lightning web component': 'LightningComponentBundle',
-    'validation rule': 'ValidationRule',
+    'validation rule': 'ValidationRule', 'permission set': 'PermissionSet',
 }
 
 
@@ -223,6 +243,7 @@ def existing_component_matches(kind, requested, context, parent=None):
     if kind=='CustomObject':
         catalog=context.get('objectCatalog',[])
         entries=[(obj['name'],obj.get('label')) for obj in [*catalog,*context.get('objects',[])] if obj.get('name')]
+        entries.extend((obj['name'], obj.get('labelPlural') or obj.get('pluralLabel')) for obj in [*catalog,*context.get('objects',[])] if obj.get('name'))
         entries.extend((name,None) for name in inventory.get(kind,[]))
     elif kind in {'CustomField','ValidationRule'}:
         entries=[]

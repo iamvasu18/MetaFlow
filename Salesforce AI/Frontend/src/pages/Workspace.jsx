@@ -6,7 +6,9 @@ import { useTheme } from '../context/ThemeContext';
 import { useOrg } from '../context/OrgContext';
 import { apiRequest } from '../services/workspaceApi';
 import { waitForBackgroundJob } from '../services/backgroundJobs';
-import { componentErrors } from '../services/componentPresentation';
+import { validTickets, jobForChat, addJob, removeJob, isOriginVisible } from '../services/chatJobs';
+import { componentErrors, packageErrors, relatedCoverageNotes } from '../services/componentPresentation';
+import { permissionGrantSummary } from '../services/permissionPresentation';
 import { canDeploy, statusText, statusLabel, conversationRequirement } from '../services/workspaceState';
 
 const RECOVERY_KEY = 'salesforce_plan_workspace_v2';
@@ -25,10 +27,18 @@ export default function Workspace() {
   const kind = 'default';
   const { theme, toggleTheme } = useTheme();
   const [requirement, setRequirement] = useState(() => location.state?.requirement || '');
-  const [bundle, setBundle] = useState(null);
-  const [queuedGeneration, setQueuedGeneration] = useState(null);
-  const [jobProgress, setJobProgress] = useState(null);
   const token = '';
+  const [bundle, setBundle] = useState(null);
+  const [generationJobs, setGenerationJobs] = useState(() => {
+    try { return validTickets(JSON.parse(localStorage.getItem(GENERATION_JOB_KEY))); } catch { return []; }
+  });
+  const [progressByJob, setProgressByJob] = useState({});
+  const jobWatchers = useRef(new Map());
+  const acceptBundleRef = useRef(null);
+  const [draftKey, setDraftKey] = useState(() => crypto.randomUUID());
+  const [requestingChats, setRequestingChats] = useState({});
+  const visibleOrg = useRef('');
+  const visibleView = useRef('');
   const [approvedHash, setApprovedHash] = useState('');
   const [repairTicket, setRepairTicket] = useState('');
   const [clarification, setClarification] = useState(null);
@@ -40,8 +50,8 @@ export default function Workspace() {
   const [messages, setMessages] = useState([]);
   const [archivedPlan, setArchivedPlan] = useState(null);
   const composerRef = useRef(null);
-  const sending = useRef(false);
-  const [busy, setBusy] = useState('');
+  const sending = useRef(new Set());
+  const [operationBusy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [recovery, setRecovery] = useState(() => location.state?.restorePlan || readRecovery());
   const operationLock = useRef(false);
@@ -51,6 +61,7 @@ export default function Workspace() {
   const [layoutChoices,setLayoutChoices]=useState([]);
   const [layoutDirty,setLayoutDirty]=useState(false);
   const [confirmDeploy,setConfirmDeploy]=useState(false);
+  const [permissionAssignment, setPermissionAssignment] = useState(null);
   const [chats, setChats] = useState([]);
   const [historyError, setHistoryError] = useState('');
   const [sourceEditor, setSourceEditor] = useState(null);
@@ -67,7 +78,13 @@ export default function Workspace() {
   const [jiraError, setJiraError] = useState('');
   const [selectedComponents, setSelectedComponents] = useState([]);
   const org = activeOrg?.id || '';
-  const generationInThisChat = Boolean(queuedGeneration && queuedGeneration.targetOrg === org && queuedGeneration.conversationId === conversationId);
+  visibleOrg.current = org;
+  const activeViewKey = `${org}:${conversationId || draftKey}`;
+  visibleView.current = activeViewKey;
+  const busy = operationBusy || (requestingChats[activeViewKey] ? 'send' : '');
+  const queuedGeneration = jobForChat(generationJobs, org, conversationId);
+  const jobProgress = queuedGeneration ? progressByJob[queuedGeneration.jobId] : null;
+  const generationInThisChat = Boolean(queuedGeneration);
   const sameOrg = !bundle || bundle.targetOrg === org;
   const selectedOrg = organizations.find(item => item.id === (bundle?.targetOrg || org)) || activeOrg;
   const orgName = selectedOrg && !/^00D[A-Za-z0-9]+$/.test(selectedOrg.name || '') ? selectedOrg.name : selectedOrg?.username || 'Salesforce org';
@@ -78,6 +95,7 @@ export default function Workspace() {
       throw new Error('Backend returned an incomplete package.');
     }
     setInformation('');
+    setPermissionAssignment(null);
     setArchivedPlan(null);
     setSourceEditor(null);
     setConfirmDeploy(false);
@@ -94,6 +112,7 @@ export default function Workspace() {
     setRecovery(saved);
     try { localStorage.setItem(RECOVERY_KEY, JSON.stringify(saved)); } catch { /* Storage may be disabled. */ }
   }, [conversationId, kind]);
+  acceptBundleRef.current = acceptBundle;
   useEffect(() => {
     let alive = true;
     if (!org) return;
@@ -108,7 +127,6 @@ export default function Workspace() {
     async function poll() {
       if (!alive) return;
       if (operationLock.current) { timer = setTimeout(poll, 2000); return; }
-      operationLock.current = true;
       try {
         const status = await apiRequest('default', `/plans/${encodeURIComponent(id)}/status`);
         if (alive) {
@@ -126,60 +144,54 @@ export default function Workspace() {
           setError(`Status check failed: ${failure.message}. Tracking will resume when the backend is available.`);
           if (!failure.status || failure.status >= 500) timer = setTimeout(poll, 3000);
         }
-      } finally { operationLock.current = false; }
+      }
     }
     timer = setTimeout(poll, 2000);
     return () => { alive = false; clearTimeout(timer); };
   }, [bundle?.id, bundle?.jobId, bundle?.state, sameOrg, acceptBundle]);
 
   useEffect(() => {
-    if (!org) return;
-    try {
-      const saved = JSON.parse(localStorage.getItem(GENERATION_JOB_KEY));
-      if (saved?.backgroundJob && saved.targetOrg === org && saved.jobId) {
-        setConversationId(saved.conversationId); setConversationOrg(org);
-        setRequirement(saved.requirement || ''); setQueuedGeneration(saved); setJobProgress(saved);
-      }
-    } catch { /* Ignore malformed local recovery data. */ }
-  }, [org]);
-  useEffect(() => {
-    if (!queuedGeneration || queuedGeneration.targetOrg !== org) return;
-    const controller = new AbortController();
-    const saved = queuedGeneration;
-    async function follow() {
-      try {
-        const result = await waitForBackgroundJob(saved, { signal: controller.signal, onProgress: value => { if (!controller.signal.aborted) setJobProgress(value); } });
-        if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) acceptBundle(result, 'default', saved.conversationId);
-      } catch (failure) {
-        if (controller.signal.aborted || visibleConversation.current !== saved.conversationId) return;
-        const question = failure.detail?.code === 'CLARIFICATION_REQUIRED' ? failure.detail : null;
-        setClarification(question); setRepairTicket(failure.detail?.repairTicket || '');
-        if (failure.detail?.code === 'NO_CHANGE_REQUIRED') { setInformation(failure.detail.message); setError(''); }
-        else setError(question ? '' : failure.message);
-      } finally {
-        if (!controller.signal.aborted) {
-          // The worker saved its reply with the terminal job state. Do not post
-          // another assistant message when this browser observes the result.
-          try {
-            if (saved.conversationId) {
-              const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(saved.conversationId)}`);
-              if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) setMessages(thread.messages);
-            }
-          } catch (failure) { if (!controller.signal.aborted && visibleConversation.current === saved.conversationId) setHistoryError(failure.message); }
+    try { localStorage.setItem(GENERATION_JOB_KEY, JSON.stringify(generationJobs)); } catch { /* Server remains authoritative. */ }
+    for (const id of jobWatchers.current.keys()) if (!generationJobs.some(job => job.jobId === id)) jobWatchers.current.delete(id);
+    for (const saved of generationJobs) {
+      if (jobWatchers.current.has(saved.jobId)) continue;
+      const controller = new AbortController();
+      jobWatchers.current.set(saved.jobId, controller);
+      const visible = () => isOriginVisible(saved, visibleOrg.current, visibleConversation.current);
+      (async () => {
+        try {
+          const result = await waitForBackgroundJob(saved, { signal: controller.signal,
+            onProgress: value => { if (!controller.signal.aborted) setProgressByJob(previous => ({ ...previous, [saved.jobId]: value })); } });
+          if (!controller.signal.aborted && visible()) acceptBundleRef.current(result, 'default', saved.conversationId);
+        } catch (failure) {
+          if (controller.signal.aborted || !visible()) return;
+          const question = failure.detail?.code === 'CLARIFICATION_REQUIRED' ? failure.detail : null;
+          setClarification(question); setRepairTicket(failure.detail?.repairTicket || '');
+          if (failure.detail?.code === 'NO_CHANGE_REQUIRED') { setInformation(failure.detail.message); setError(''); }
+          else setError(question ? '' : failure.message);
+        } finally {
           if (!controller.signal.aborted) {
-            try { localStorage.removeItem(GENERATION_JOB_KEY); } catch { /* Storage may be disabled. */ }
-            setQueuedGeneration(null); setJobProgress(null);
+            try {
+              const thread = await apiRequest('default', `/orgs/${encodeURIComponent(saved.targetOrg)}/conversations/${encodeURIComponent(saved.conversationId)}`);
+              if (!controller.signal.aborted && visible()) setMessages(thread.messages);
+            } catch (failure) { if (!controller.signal.aborted && visible()) setHistoryError(failure.message); }
+            if (!controller.signal.aborted) {
+              setGenerationJobs(previous => removeJob(previous, saved.jobId));
+              setProgressByJob(previous => { const next = { ...previous }; delete next[saved.jobId]; return next; });
+            }
           }
         }
-      }
+      })();
     }
-    follow();
-    return () => controller.abort();
-  }, [queuedGeneration?.jobId, org, acceptBundle]);
+  }, [generationJobs]);
+  useEffect(() => () => {
+    for (const controller of jobWatchers.current.values()) controller.abort();
+    jobWatchers.current.clear();
+  }, []);
 
   async function loadChat(chat, keepConversation = false) {
     if (operationLock.current) return;
-    operationLock.current = true; setBusy('restore'); setError(''); setSidebarOpen(false);
+    operationLock.current = true; setBusy('restore'); setError(''); setSidebarOpen(false); setPermissionAssignment(null);
     try {
       if (chat.kind === 'conversation') {
         const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(chat.id)}`);
@@ -187,7 +199,7 @@ export default function Workspace() {
         setBundle(null); setApprovedHash(''); setClarification(null); setInformation('');
         const latest = thread.messages.at(-1);
         const latestPlan = [...thread.messages].reverse().find(message => message.plan_id);
-        if (latestPlan && !['clarification', 'error', 'no_change'].includes(latest?.kind)) acceptBundle(await apiRequest('default', `/plans/${encodeURIComponent(latestPlan.plan_id)}`), kind, thread.id);
+        if (latestPlan && !jobForChat(generationJobs, org, thread.id) && !requestingChats[`${org}:${thread.id}`] && !['clarification', 'error', 'no_change', 'message'].includes(latest?.kind)) acceptBundle(await apiRequest('default', `/plans/${encodeURIComponent(latestPlan.plan_id)}`), kind, thread.id);
         if (latest?.kind === 'clarification') { setRequirement(latest.context); setClarification({ question: latest.content }); }
         else if (latest?.kind === 'no_change') { setInformation(latest.content); setRequirement(latest.context); }
         else if (latest?.kind === 'error') { setError(latest.content); setRequirement(latest.context || ''); }
@@ -232,14 +244,14 @@ export default function Workspace() {
 
   async function viewSavedPlan(planId) {
     if (operationLock.current) return;
-    operationLock.current = true; setBusy('view');
+    operationLock.current = true; setBusy('view'); setPermissionAssignment(null);
     try { setArchivedPlan(await apiRequest('default', `/plans/${encodeURIComponent(planId)}`)); }
     catch (failure) { setError(failure.message); }
     finally { operationLock.current = false; setBusy(''); }
   }
   async function pushMessage(threadId, payload) {
     const message = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations/${encodeURIComponent(threadId)}/messages`, { method: 'POST', body: payload });
-    setMessages(previous => [...previous, message]);
+    if (visibleOrg.current === org && visibleConversation.current === threadId) setMessages(previous => [...previous, message]);
     return message;
   }
   async function reply(threadId, content, messageKind, context = '', planId = null) {
@@ -248,29 +260,76 @@ export default function Workspace() {
     catch (failure) { setHistoryError(`The operation completed, but its chat reply could not be saved: ${failure.message}`); }
   }
   async function sendMessage(text = inputMessage, fresh = false) {
-    if (operationLock.current || sending.current || locked || !org || !text.trim()) return;
-    if (/\b(?:named|called)\s*$/i.test(text)) { composerRef.current?.focus(); return; }
+    if (operationLock.current || locked || !org || !text.trim()) return;
     if (!fresh && conversationId && conversationOrg !== org) { setError('Start a new chat for the selected org.'); return; }
-    sending.current = true; setBusy('send');
+    let viewKey = activeViewKey;
+    if (sending.current.has(viewKey)) return;
+    sending.current.add(viewKey);
+    setRequestingChats(previous => ({ ...previous, [viewKey]: true }));
+    let threadId = fresh ? null : conversationId;
+    const visible = () => visibleView.current === viewKey;
     try {
       const nextRequirement = fresh ? text.trim() : conversationRequirement(requirement, text, clarification, bundle, { continuing: Boolean(conversationId), referenceOnly: Boolean(information) });
-      if (fresh) { reset(); setTab('chat'); setBusy('send'); }
-      let threadId = fresh ? null : conversationId;
       if (!threadId) {
         const thread = await apiRequest('default', `/orgs/${encodeURIComponent(org)}/conversations`, { method: 'POST', body: { title: text.trim().slice(0, 300) } });
-        threadId = thread.id; setConversationId(threadId); setConversationOrg(org);
+        threadId = thread.id;
         setChats(previous => [thread, ...previous]);
-        if (bundle && !fresh) await pushMessage(threadId, { role: 'assistant', content: `Previous implementation: ${bundle.plan?.summary || bundle.requirement}`, kind: 'plan', plan_id: bundle.id, context: bundle.requirement });
+        const wasVisible = visible();
+        const oldKey = viewKey;
+        viewKey = `${org}:${threadId}`;
+        sending.current.delete(oldKey); sending.current.add(viewKey);
+        setRequestingChats(previous => { const next = { ...previous }; delete next[oldKey]; next[viewKey] = true; return next; });
+        if (wasVisible) {
+          visibleView.current = viewKey; visibleConversation.current = threadId;
+          if (fresh) reset();
+          setConversationId(threadId); setConversationOrg(org); setTab('chat');
+        }
       }
       await pushMessage(threadId, { role: 'user', content: text.trim() });
-      setInputMessage(''); setRequirement(nextRequirement);
-      // Previous plans remain in saved chat history; they must not appear as
-      // the result of a new request that has failed or needs clarification.
-      setBundle(null); setApprovedHash(''); setConfirmDeploy(false);
-      setSourceEditor(null); setRepairEditor(null); setClarification(null);
-      await run(!fresh && clarification ? 'clarify' : 'generate', '', nextRequirement, '', threadId);
-    } catch (failure) { setError(failure.message); }
-    finally { sending.current = false; setBusy(''); }
+      if (visible()) { setInputMessage(''); setError(''); }
+      const decision = await apiRequest('default', '/workspace/respond', { method: 'POST', body: {
+        target_org: org, message: text.trim(),
+        pending_requirement: !fresh && clarification ? requirement : '',
+        pending_question: !fresh && clarification ? clarification.question : '',
+        reference_context: !fresh && !clarification && bundle ? nextRequirement : '',
+        recent_messages: fresh ? [] : messages.filter(message => ['user', 'assistant'].includes(message.role) && message.content).slice(-8).map(message => ({ role: message.role, content: message.content.slice(0, 6000) })),
+      } });
+      if (decision.action !== 'build') {
+        if (!['answer', 'clarify'].includes(decision.action) || !decision.response) throw new Error('Invalid conversation response. No plan was generated.');
+        if (visible() && decision.action === 'clarify') {
+          setClarification({ question: decision.response }); setRequirement(decision.requirement || text.trim());
+          setBundle(null); setApprovedHash(''); setConfirmDeploy(false);
+        }
+        await reply(threadId, decision.response, decision.action === 'clarify' ? 'clarification' : 'message', decision.requirement || '');
+        return;
+      }
+      if (!decision.requirement) throw new Error('No complete implementation request was returned.');
+      if (visible()) {
+        setRequirement(decision.requirement); setBundle(null); setApprovedHash(''); setConfirmDeploy(false);
+        setSourceEditor(null); setRepairEditor(null); setClarification(null);
+      }
+      const result = await apiRequest('default', '/plan', { method: 'POST', body: {
+        requirement: decision.requirement, target_org: org, generate_files: true,
+        job_key: crypto.randomUUID(), conversation_id: threadId,
+      } });
+      if (result.backgroundJob) {
+        const tracked = { ...result, conversationId: threadId, requirement: decision.requirement };
+        setGenerationJobs(previous => addJob(previous, tracked));
+      } else {
+        if (visible()) acceptBundle(result, kind, threadId);
+        await reply(threadId, result.plan?.summary || 'A new implementation draft is ready for review.', 'plan', result.requirement, result.id);
+      }
+    } catch (failure) {
+      const question = failure.detail?.code === 'CLARIFICATION_REQUIRED' ? failure.detail : null;
+      if (visible()) {
+        setClarification(question); setRepairTicket(failure.detail?.repairTicket || '');
+        setError(question ? '' : failure.message);
+      }
+      await reply(threadId, question?.question || failure.message, question ? 'clarification' : 'error', text.trim());
+    } finally {
+      sending.current.delete(viewKey);
+      setRequestingChats(previous => { const next = { ...previous }; delete next[viewKey]; return next; });
+    }
   }
 
   async function run(action, componentName = '', answeredRequirement = '', repairNote = repairInstruction, threadId = conversationId) {
@@ -292,12 +351,20 @@ export default function Workspace() {
           body: { requirement: answeredRequirement || requirement, target_org: org, generate_files: true, job_key: crypto.randomUUID(), conversation_id: threadId, ...(action === 'fix-generation' ? { repair_error: error, ...(repairTicket ? { repair_ticket: repairTicket } : {}) } : {}) } });
         if (result.backgroundJob) {
           const tracked = { ...result, conversationId: threadId, requirement: answeredRequirement || requirement };
-          try { localStorage.setItem(GENERATION_JOB_KEY, JSON.stringify(tracked)); } catch { /* Server remains authoritative. */ }
-          setJobProgress(result); setQueuedGeneration(tracked);
+          setGenerationJobs(previous => addJob(previous, tracked));
           return;
         }
         acceptBundle(result, kind, threadId);
         await reply(threadId, result.plan?.summary || 'A new implementation draft is ready for review.', 'plan', result.requirement, result.id);
+      } else if (action === 'assign-permission-set') {
+        if (!permissionAssignment?.username.trim() || !permissionAssignment.confirmed) throw new Error('Enter an exact Salesforce username and confirm the access grant.');
+        const result = await apiRequest('default', `/plans/${encodeURIComponent(bundle.id)}/assign-permission-set`, { method: 'POST', body: {
+          component_name: permissionAssignment.name, source_hash: bundle.sourceHash,
+          username: permissionAssignment.username.trim(), confirmed: true,
+        } });
+        acceptBundle(result);
+        await reply(threadId, result.assignmentResult?.message || 'Permission Set assignment checked.', 'message');
+        setPermissionAssignment(null);
       } else if (action === 'activate-flow') {
         const result=await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/activate-flow`, {method:'POST',body:{component_name:componentName,source_hash:bundle.sourceHash}});
         acceptBundle(result);
@@ -308,7 +375,7 @@ export default function Workspace() {
         setSourceEditor(null);
       } else if (action === 'repair' || action === 'revise') {
         if (!sameOrg || !canRevise) throw new Error('Select the original org and check the saved operation before revising.');
-        if (action === 'repair' && !componentName && !canRepair) throw new Error('Select a component to repair.');
+        if (action === 'repair' && !componentName) throw new Error('Select a component to repair.');
         const body = action === 'repair' ? { component_name: componentName, instruction: repairNote, source_hash: bundle.sourceHash } : { requirement: editText };
         const result = await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/${action}`, { method: 'POST', body });
         acceptBundle(result);
@@ -369,7 +436,8 @@ export default function Workspace() {
   }
 
   function reset() {
-    setConfirmDeploy(false);
+    setConfirmDeploy(false); setPermissionAssignment(null);
+    setDraftKey(crypto.randomUUID());
     setConversationId(null); setConversationOrg(''); setMessages([]); setInputMessage(''); setArchivedPlan(null);
     setInformation('');
     setArchivedPlan(null);
@@ -417,12 +485,12 @@ export default function Workspace() {
       <aside className={`ws-sidebar ${sidebarOpen ? 'ws-sidebar-open' : ''}`}>
         <div className="ws-brand"><Cloud size={22} /><strong>Workspace</strong><button className="ws-mobile-close" aria-label="Close navigation" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
         <div className="ws-sidebar-body">
-          <button className="ws-new" disabled={Boolean(busy)} onClick={reset}><Plus size={18} /> New Chat</button>
+          <button className="ws-new" disabled={Boolean(operationBusy)} onClick={reset}><Plus size={18} /> New Chat</button>
           <button className="ws-side-action" disabled={locked} onClick={() => uploadRef.current?.click()}><Upload size={17} /> Upload requirement</button>
           <input ref={uploadRef} hidden type="file" accept=".txt,.md" onChange={uploadRequirement} />
           <p className="ws-label">PREVIOUS CHATS</p>{busy === 'generate' && <div className="ws-history"><MessageSquare size={16} /><span>{requirement}</span></div>}
-          {chats.filter(chat => chat.targetOrg === org).map(chat => <button key={chat.id} title={chat.requirement} aria-label={`Open chat: ${chat.requirement}`} className="ws-history" disabled={Boolean(busy)} onClick={() => loadChat(chat)}><MessageSquare size={16} /><span>{chat.requirement || 'Saved requirement'}</span></button>)}
-          {!chats.some(chat => chat.targetOrg === org) && recovery?.targetOrg === org && <button className="ws-history" disabled={Boolean(busy)} onClick={() => loadChat(recovery)}><MessageSquare size={16} /><span>{recovery.requirement || 'Previous requirement'}</span></button>}
+          {chats.filter(chat => chat.targetOrg === org).map(chat => <button key={chat.id} title={chat.requirement} aria-label={`Open chat: ${chat.requirement}`} className="ws-history" disabled={Boolean(operationBusy)} onClick={() => loadChat(chat)}><MessageSquare size={16} /><span>{chat.requirement || 'Saved requirement'}</span></button>)}
+          {!chats.some(chat => chat.targetOrg === org) && recovery?.targetOrg === org && <button className="ws-history" disabled={Boolean(operationBusy)} onClick={() => loadChat(recovery)}><MessageSquare size={16} /><span>{recovery.requirement || 'Previous requirement'}</span></button>}
           {historyError && <p className="ws-muted">{historyError}</p>}
         </div>
         <div className="ws-org"><Cloud size={16} /><div><select aria-label="Target org" className="ws-input" value={org} disabled={Boolean(busy || queuedGeneration) || Boolean(conversationId)} onChange={event => selectOrganization(event.target.value)}>{organizations.map(item => <option key={item.id} value={item.id}>{!/^00D[A-Za-z0-9]+$/.test(item.name || '') ? item.name : item.username}</option>)}</select><small>Active Salesforce org</small></div></div>
@@ -470,7 +538,7 @@ export default function Workspace() {
           {bundle && <section className="ws-plan">
             <div className="ws-plan-header"><div><h2>{bundle.componentName}</h2><p>Implementation plan · {orgName}</p></div><span className={`ws-badge ${bundle.state === 'deployed' || bundle.state === 'validated' ? 'success' : ''}`}>{statusLabel(bundle)}</span></div>
             {bundle.state !== 'deployed' && <div className="ws-selection"><span>{selectedComponents.length} of {components.length} components selected</span><div>{['Valid only', 'All', 'None'].map(choice => <button key={choice} className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !canRevise} onClick={() => setSelectedComponents(choice === 'None' ? [] : components.filter(component => choice === 'All' || !componentErrors(bundle, component).length).map(item => `${item.metadataType}:${item.fullName}`))}>{choice}</button>)}</div></div>}
-            <div className="ws-components">{components.map(item => <div className="ws-component" key={`${item.metadataType}:${item.fullName}`}>{bundle.state !== 'deployed' && <input type="checkbox" aria-label={`Select ${item.fullName}`} checked={selectedComponents.includes(`${item.metadataType}:${item.fullName}`)} disabled={Boolean(busy || queuedGeneration) || !canRevise || !sameOrg} onChange={event => setSelectedComponents(previous => event.target.checked ? [...previous, `${item.metadataType}:${item.fullName}`] : previous.filter(key => key !== `${item.metadataType}:${item.fullName}`))} />}<Code2 size={20} /><div><strong>{item.fullName}</strong><small>{item.metadataType}</small>{componentErrors(bundle, item).map((message, index) => <small className="ws-log-failure" key={index}>{message}</small>)}</div><span className="ws-badge">CREATE</span>{bundle.state === 'deployed' && item.metadataType === 'Flow' && <div className="ws-component-actions"><button type="button" className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || bundle.flowActivations?.[item.fullName]?.state === 'active'} onClick={() => run('activate-flow',item.fullName)}>{busy === 'activate-flow' && activeComponent === item.fullName ? 'Activating…' : bundle.flowActivations?.[item.fullName]?.state === 'active' ? 'Active' : ['running','unknown'].includes(bundle.flowActivations?.[item.fullName]?.state) ? 'Check activation' : 'Activate'}</button>{bundle.flowActivations?.[item.fullName]?.message && <small role="status">{bundle.flowActivations[item.fullName].message}</small>}</div>}{bundle.state !== 'deployed' && <div className="ws-component-actions"><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => openSourceEditor(item)}><Pencil size={14} />Edit</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => { if (canRepair) run('repair', item.fullName, '', ''); else { setRepairEditor(item.fullName); setRepairInstruction(''); } }}><Wrench size={14} />{busy === 'repair' && activeComponent === item.fullName ? 'Fixing…' : 'Fix with AI'}</button></div>}</div>)}</div>
+            <div className="ws-components">{components.map(item => <div className="ws-component" key={`${item.metadataType}:${item.fullName}`}>{bundle.state !== 'deployed' && <input type="checkbox" aria-label={`Select ${item.fullName}`} checked={selectedComponents.includes(`${item.metadataType}:${item.fullName}`)} disabled={Boolean(busy || queuedGeneration) || !canRevise || !sameOrg} onChange={event => setSelectedComponents(previous => event.target.checked ? [...previous, `${item.metadataType}:${item.fullName}`] : previous.filter(key => key !== `${item.metadataType}:${item.fullName}`))} />}<Code2 size={20} /><div><strong>{item.fullName}</strong><small>{item.metadataType}</small>{item.metadataType === 'PermissionSet' && <div><small>Access granted by this Permission Set:</small>{permissionGrantSummary(bundle, item.fullName).map((grant, index) => <small key={`grant:${index}`}>{grant}</small>)}<small>Other profiles and Permission Sets may grant additional access.</small></div>}{relatedCoverageNotes(bundle, item).map((message, index) => <small role="status" key={`coverage:${index}`}>{message}</small>)}{componentErrors(bundle, item).map((message, index) => <small className="ws-log-failure" key={index}>{message}</small>)}</div><span className="ws-badge">CREATE</span>{bundle.state === 'deployed' && item.metadataType === 'PermissionSet' && <button type="button" className="ws-button secondary" disabled={locked || !sameOrg} onClick={() => setPermissionAssignment({ name: item.fullName, username: '', confirmed: false })}>Assign to user</button>}{bundle.state === 'deployed' && item.metadataType === 'Flow' && <div className="ws-component-actions"><button type="button" className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || bundle.flowActivations?.[item.fullName]?.state === 'active'} onClick={() => run('activate-flow',item.fullName)}>{busy === 'activate-flow' && activeComponent === item.fullName ? 'Activating…' : bundle.flowActivations?.[item.fullName]?.state === 'active' ? 'Active' : ['running','unknown'].includes(bundle.flowActivations?.[item.fullName]?.state) ? 'Check activation' : 'Activate'}</button>{bundle.flowActivations?.[item.fullName]?.message && <small role="status">{bundle.flowActivations[item.fullName].message}</small>}</div>}{bundle.state !== 'deployed' && <div className="ws-component-actions"><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => openSourceEditor(item)}><Pencil size={14} />Edit</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => { if (componentErrors(bundle, item).length || canRepair) run('repair', item.fullName, '', ''); else { setRepairEditor(item.fullName); setRepairInstruction(''); } }}><Wrench size={14} />{busy === 'repair' && activeComponent === item.fullName ? 'Fixing…' : 'Fix with AI'}</button></div>}</div>)}</div>
             {bundle.operation === 'deploy' && <section className="ws-deployment" aria-live="polite"><h3>{bundle.state === 'deployed' ? `Done — ${components.length}/${components.length}` : bundle.state === 'failed' ? 'Deployment failed' : 'Deploying selected components…'}{['deployed', 'failed'].includes(bundle.state) && bundle.operationSeconds != null && ` in ${Number(bundle.operationSeconds).toFixed(1)}s`}</h3><p>{orgName} · Job {bundle.jobId || 'being submitted'}</p><div className="ws-deployment-log">{bundle.state === 'deployed' && components.map(item => <div key={`${item.metadataType}:${item.fullName}`} className="ws-log-success">✓ CREATE {item.metadataType} — {item.fullName}: deployed</div>)}{(bundle.lastResult?.result?.details?.componentFailures || []).map((failure, index) => <div key={index} className="ws-log-failure">✕ {failure.fullName || failure.fileName}: {failure.problem}</div>)}{!['deployed', 'failed'].includes(bundle.state) && <div>Waiting for Salesforce completion. Status refreshes automatically.</div>}</div><progress aria-label="Deployment progress" max="1" {...(bundle.state === 'deployed' ? { value: 1 } : {})} /></section>}
             {bundle.testClasses?.length > 0 && <p className="ws-plan-note">Tests: {bundle.testClasses.join(', ')}</p>}
 
@@ -478,7 +546,6 @@ export default function Workspace() {
             {tab === 'files' && <div className="ws-files">{Object.entries(bundle.files).map(([path, source]) => <details key={path}><summary><FileText size={16} />{path}</summary><pre><code>{source}</code></pre></details>)}<details><summary>Source fingerprint</summary><pre>{bundle.sourceHash}</pre></details></div>}
             {bundle.state !== 'deployed' && <div className="ws-plan-footer">
               {canRevise && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => editPlan()}><Pencil size={15} />Edit request</button>}
-              {canRepair && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('repair')}><Wrench size={15} />Fix with AI</button>}
               {!approved && !approving && bundle.state !== 'rejected' && <>
                 <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !bundle.layoutReady || layoutDirty || !selectedComponents.length} onClick={() => run(approved ? 'validate' : 'approve')}><ShieldCheck size={17} />Approve</button>
                 {!approved && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('reject')}>Reject Plan</button>}
@@ -505,24 +572,25 @@ export default function Workspace() {
 
           {bundle?.sourceChanges?.length > 0 && <section className="ws-status"><h3>Source changes · approval required</h3>{bundle.sourceChanges.map(change => <details key={change.path}><summary>{change.path}</summary><p>Before</p><pre style={{ overflow: 'auto' }}>{change.before}</pre><p>After</p><pre style={{ overflow: 'auto' }}>{change.after}</pre></details>)}<p>Source saved. Review the changes; Salesforce validation runs after approval.</p></section>}
           {archivedPlan && <section className="ws-status"><h3>Saved plan · {archivedPlan.id}</h3><p>{archivedPlan.plan?.summary}</p><p>{statusText(archivedPlan)}</p>{Object.entries(archivedPlan.files).map(([path, source]) => <details key={path}><summary>{path}</summary><pre style={{ overflow: 'auto' }}>{source}</pre></details>)}<button className="ws-button secondary" onClick={() => setArchivedPlan(null)}>Close saved plan</button></section>}
+          {permissionAssignment && <section className="ws-status"><h3>Assign {permissionAssignment.name}</h3><p>This grants the deployed Permission Set's access to one Salesforce user. Review its permissions before confirming.</p><label>Exact Salesforce username<input className="ws-input" value={permissionAssignment.username} disabled={Boolean(busy)} onChange={event => setPermissionAssignment(previous => ({ ...previous, username: event.target.value, confirmed: false }))} /></label><label><input type="checkbox" checked={permissionAssignment.confirmed} disabled={Boolean(busy)} onChange={event => setPermissionAssignment(previous => ({ ...previous, confirmed: event.target.checked }))} />I confirm granting this Permission Set to the specified user.</label><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy) || !permissionAssignment.username.trim() || !permissionAssignment.confirmed} onClick={() => run('assign-permission-set', permissionAssignment.name)}>Confirm assignment</button><button className="ws-button secondary" disabled={Boolean(busy)} onClick={() => setPermissionAssignment(null)}>Cancel</button></div></section>}
           {sourceEditor && <section className="ws-status"><h3>Edit source · {sourceEditor.name}</h3><p>Save changes, review the files, then approve again. Salesforce validation checks deployment compatibility.</p><div className="ws-plan-footer">{Object.keys(sourceEditor.files).map(path => <button key={path} className="ws-button secondary" onClick={() => setSourceEditor(previous => ({ ...previous, path }))}>{path.split('/').pop()}</button>)}</div><textarea className="ws-input ws-edit-request" style={{ minHeight: 360, fontFamily: 'monospace', width: '100%' }} spellCheck={false} aria-label={`Source ${sourceEditor.path}`} value={sourceEditor.files[sourceEditor.path]} disabled={Boolean(busy || queuedGeneration)} onChange={event => { const text = event.target.value; setSourceEditor(previous => ({ ...previous, files: { ...previous.files, [previous.path]: text } })); }} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('save-source', sourceEditor.name)}>Save source</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setSourceEditor(null)}>Cancel</button></div></section>}
           {repairEditor && <section className="ws-status"><h3>Fix with AI · {repairEditor}</h3><p>AI will use the saved error and this component’s source. Describe any additional correction you want.</p><textarea className="ws-input ws-edit-request" aria-label="AI correction instructions" value={repairInstruction} disabled={Boolean(busy || queuedGeneration)} onChange={event => setRepairInstruction(event.target.value)} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || (!repairInstruction.trim() && !canRepair)} onClick={() => run('repair', repairEditor)}>{busy === 'repair' ? 'Fixing…' : 'Apply AI fix'}</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setRepairEditor(null)}>Cancel</button></div></section>}
           {editRequest && <section className="ws-status"><h3>Edit {editRequest}</h3><p>Update the requirement or describe the component change. This generates a new draft; its files need fresh approval.</p><textarea className="ws-input ws-edit-request" value={editText} disabled={Boolean(busy || queuedGeneration)} onChange={event => setEditText(event.target.value)} aria-label="Updated requirement" /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !editText.trim()} onClick={() => run('revise')}>Generate revised plan</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setEditRequest(null)}>Cancel</button></div></section>}
-          {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{bundle.lastResult?.result?.details?.componentFailures?.length > 0 && <ul className="ws-error">{bundle.lastResult.result.details.componentFailures.map((failure, index) => <li key={`${failure.fileName}:${index}`}><strong>{failure.fileName || failure.fullName}</strong>: {failure.problem}</li>)}</ul>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
+          {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{packageErrors(bundle).map((message, index) => <p className="ws-error" key={index}>{message}</p>)}{bundle.state === 'failed' && bundle.jobId && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('report')}>Load Salesforce error details</button>}{bundle.lastResult?.result?.details?.componentFailures?.length > 0 && <ul className="ws-error">{bundle.lastResult.result.details.componentFailures.map((failure, index) => <li key={`${failure.fileName}:${index}`}><strong>{failure.fileName || failure.fullName}</strong>: {failure.problem}</li>)}</ul>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
           {(approving || (approved && busy === 'validate')) && <div className="ws-status" role="status">Approved · Validating with Salesforce…</div>}
-          {busy && <div className="ws-status" role="status"><span className="ws-spinner" />{['generate','fix-generation'].includes(busy) ? 'Thinking…' : busy === 'repair' ? 'AI is reviewing the saved failure and generating a corrected draft…' : busy === 'revise' ? 'Generating your revised plan…' : `${busy}: waiting for Salesforce…`}</div>}
+          {busy && !generationInThisChat && <div className="ws-status" role="status"><span className="ws-spinner" />{['send','clarify','generate','fix-generation'].includes(busy) ? 'Thinking…' : busy === 'repair' ? 'AI is reviewing the saved failure and generating a corrected draft…' : busy === 'revise' ? 'Generating your revised plan…' : `${busy}: waiting for Salesforce…`}</div>}
           {information && <section className="ws-status" role="status"><h3>Workspace update</h3><p>{information}</p></section>}
           {clarification && !messages.some(message => message.role === 'assistant' && message.kind === 'clarification' && message.content === clarification.question) && <div className="ws-assistant" aria-live="polite"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{clarification.question}</p></div></div>}
           {generationInThisChat && <div className="ws-assistant" role="status"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{jobProgress?.state === 'reconnecting' ? 'Reconnecting to your saved request…' : 'Thinking…'}</p></div></div>}
-          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />Fix with AI</button>}{!clarification && <Link className="ws-settings-toggle" to="/settings">Review connections</Link>}</div>}
+          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && !/oauth|authentication|expired.*token|reconnect|connection|permission|forbidden/i.test(error) && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />Fix with AI</button>}{/oauth|authentication|expired.*token|reconnect|org.*connection/i.test(error) && <Link className="ws-settings-toggle" to="/settings#salesforce">Reconnect Salesforce</Link>}</div>}
         </div>
 
         <footer className="ws-composer-area">
           <form onSubmit={event => { event.preventDefault(); sendMessage(); }}>
             <div className="ws-composer-toolbar"><span>Automatic planning · {orgName}</span><button type="button" className="ws-settings-toggle" onClick={() => setShowSettings(value => !value)}><Settings2 size={15} /> Implementation settings</button></div>
-            {showSettings && <div className="ws-settings"><Link to="/settings#salesforce">Salesforce connection</Link><Link to="/settings#ai">AI provider</Link><Link to="/settings#jira">Jira connection</Link></div>}
+
             <div className="ws-composer"><button type="button" aria-label="Upload text requirement" disabled={locked} onClick={() => uploadRef.current?.click()}><Upload size={19} /></button><textarea ref={composerRef} aria-label="Message" rows={2} maxLength={20000} required value={inputMessage} disabled={!org || activeOrg?.status === 'Reconnect required'} onChange={event => setInputMessage(event.target.value)} placeholder={clarification ? "Reply here, or give a complete request with a different component name…" : "Describe a requirement or add a follow-up…"} /><button className="ws-send" type="submit" aria-label="Send message" disabled={locked || !org || !inputMessage.trim()}><Send size={20} /></button></div>
-            <p className="ws-composer-note">{queuedGeneration && !generationInThisChat ? 'Another chat has a pending request. You can browse chats and type here; sending becomes available when it finishes.' : ['queued', 'running', 'pending', 'unknown'].includes(bundle?.state) ? 'Check the current Salesforce operation before submitting a follow-up. You can type your next message now.' : 'Continue in this chat. Each new draft needs its own approval and validation.'}</p>
+            <p className="ws-composer-note">{generationInThisChat ? 'This chat has an active request. You can continue in another chat while it finishes.' : ['queued', 'running', 'pending', 'unknown'].includes(bundle?.state) ? 'Check the current Salesforce operation before submitting a follow-up. You can type your next message now.' : 'Continue in this chat. Each new draft needs its own approval and validation.'}</p>
           </form>
         </footer>
       </main>

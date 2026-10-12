@@ -79,7 +79,7 @@ class SalesforceMetadataApi:
         finally:logging.getLogger(__name__).warning('Salesforce transport=metadata-api operation=%s seconds=%.3f',method,time.perf_counter()-started)
 
     def list_metadata(self,kind):
-        if kind not in {'Layout','RecordType','CustomObject','CustomField','ValidationRule','ApexClass','ApexTrigger','Flow','LightningComponentBundle'}:raise ValueError('Unsupported metadata inventory.')
+        if kind not in {'PermissionSet','Layout','RecordType','CustomObject','CustomField','ValidationRule','ApexClass','ApexTrigger','Flow','LightningComponentBundle'}:raise ValueError('Unsupported metadata inventory.')
         query=element('queries');query.append(element('type',kind))
         rows=[xml_value(row) for row in self.call('listMetadata',[query,element('asOfVersion',self.version)])]
         if any(not isinstance(r,dict) or not isinstance(r.get('fullName'),str) or not r['fullName'] for r in rows):raise RuntimeError('Metadata inventory is incomplete.')
@@ -171,7 +171,7 @@ def metadata_archive(files,version):
         elif parts[0]=='lwc' and len(parts)==3:
             validate_component_name('LightningComponentBundle',parts[1]);output[relative]=body;member('LightningComponentBundle',parts[1])
         else:
-            mapping={'classes':('ApexClass','.cls'),'triggers':('ApexTrigger','.trigger'),'flows':('Flow','.flow-meta.xml'),'layouts':('Layout','.layout-meta.xml'),'profiles':('Profile','.profile-meta.xml')}
+            mapping={'permissionsets':('PermissionSet','.permissionset-meta.xml'),'classes':('ApexClass','.cls'),'triggers':('ApexTrigger','.trigger'),'flows':('Flow','.flow-meta.xml'),'layouts':('Layout','.layout-meta.xml'),'profiles':('Profile','.profile-meta.xml')}
             if len(parts)!=2 or parts[0] not in mapping:raise ValueError('Unsupported deploy source type.')
             kind,suffix=mapping[parts[0]];name=parts[1]
             if kind in {'ApexClass','ApexTrigger'}:
@@ -191,7 +191,7 @@ def metadata_archive(files,version):
                 if parsed.tag!=Q(kind):raise ValueError('Metadata XML type mismatch.')
                 if kind=='Flow' and parsed.findtext(Q('status'))!='Draft':
                     raise ValueError('Deploy Flows as Draft, then use Activate after successful deployment.')
-                output[parts[0]+'/'+ident+('.flow' if kind=='Flow' else '.layout' if kind=='Layout' else '.profile')]=body;member(kind,ident)
+                output[parts[0]+'/'+ident+('.flow' if kind=='Flow' else '.layout' if kind=='Layout' else '.permissionset' if kind=='PermissionSet' else '.profile')]=body;member(kind,ident)
     for obj,node in objects.items():
         # CustomObject child elements follow Metadata WSDL ordering. Stable sort
         # preserves field/rule order and emits only reviewed source children.

@@ -177,7 +177,11 @@ class LWCAutomationService:
 
     def archive(self,bundle):
         from Backend.AI.app.services.metadata_safety import source_relative_path, validate_component_name
-        validate_component_name('LightningComponentBundle', bundle['componentName'])
+        if bundle.get('components'):
+            for component in bundle['components']:
+                validate_component_name(component['metadataType'], component['fullName'])
+        else:
+            validate_component_name('LightningComponentBundle', bundle['componentName'])
         for path in bundle['files']:
             source_relative_path(path)
         stream = io.BytesIO()
@@ -206,6 +210,13 @@ class LWCAutomationService:
         return payload
 
     def ensure_new(self,bundle):
+        from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+        transport = owned_metadata_api(bundle['targetOrg'], bundle['apiVersion'])
+        if transport is not None:
+            records = transport.api.list_components('LightningComponentBundle')
+            if any(str(record.get('fullName', '')).casefold() == bundle['componentName'].casefold() for record in records):
+                raise ValueError('Component already exists in the connected org; choose a distinct name.')
+            return
         payload = self.cli(['org','list','metadata','--metadata-type','LightningComponentBundle',
                             '--target-org',bundle['targetOrg']])
         records = payload.get('result')
@@ -220,6 +231,10 @@ class LWCAutomationService:
         # Validate untrusted archive paths before any external operation.
         source_archive = self.archive(bundle)
         self.ensure_new(bundle)
+        from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+        transport = owned_metadata_api(bundle['targetOrg'], bundle['apiVersion'])
+        if transport is not None:
+            return transport.deploy(bundle, check_only=dry_run)
         with tempfile.TemporaryDirectory(prefix='lwc-service-',ignore_cleanup_errors=True) as directory:
             root = Path(directory)
             with zipfile.ZipFile(io.BytesIO(source_archive)) as archive:
@@ -234,4 +249,8 @@ class LWCAutomationService:
         job_id = bundle.get('jobId')
         if not isinstance(job_id,str) or not re.fullmatch(r'[A-Za-z0-9]{15,18}',job_id):
             raise ValueError('No saved deployment job ID. Inspect the org deployment status manually.')
+        from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+        transport = owned_metadata_api(bundle['targetOrg'], bundle['apiVersion'])
+        if transport is not None:
+            return transport.report(job_id)
         return self.cli(['project','deploy','report','--job-id',job_id,'--target-org',bundle['targetOrg']])

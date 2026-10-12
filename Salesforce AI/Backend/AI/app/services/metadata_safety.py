@@ -5,7 +5,7 @@ from pathlib import Path, PurePosixPath
 API_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]*\Z")
 _RESERVED = re.compile(r"(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)", re.I)
 _ROOT = ("force-app", "main", "default")
-_TYPES = {"CustomObject", "CustomField", "ValidationRule", "Flow", "ApexClass", "ApexTrigger", "LightningComponentBundle"}
+_TYPES = {"PermissionSet", "CustomObject", "CustomField", "ValidationRule", "Flow", "ApexClass", "ApexTrigger", "LightningComponentBundle"}
 
 
 def validate_component_name(metadata_type, full_name):
@@ -52,7 +52,7 @@ def safe_source_target(project_root, relative_path):
 
 def component_path(metadata_type, full_name):
     parts = validate_component_name(metadata_type, full_name)
-    folders = {"Flow": ("flows", ".flow-meta.xml"), "ApexClass": ("classes", ".cls"), "ApexTrigger": ("triggers", ".trigger")}
+    folders = {"PermissionSet": ("permissionsets", ".permissionset-meta.xml"), "Flow": ("flows", ".flow-meta.xml"), "ApexClass": ("classes", ".cls"), "ApexTrigger": ("triggers", ".trigger")}
     if metadata_type in folders:
         folder, suffix = folders[metadata_type]
         return Path("force-app/main/default") / folder / (full_name + suffix)

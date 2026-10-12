@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - stage2-ci-observability
+      - stage2-observability
   pull_request:
     branches:
       - main
@@ -74,6 +75,7 @@ jobs:
           Backend/AI/app/tests/test_salesforce_api_discovery.py
           Backend/AI/app/tests/test_flow_activation.py
           Backend/AI/app/tests/test_metadata_api_transport.py
+          Backend/AI/app/tests/test_repair_reliability.py
           -q
 
       - name: Run replay evaluations

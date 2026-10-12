@@ -419,7 +419,7 @@ async def account_guard(request,call_next):
             with db() as c:row=c.execute('SELECT org_id FROM plans WHERE id=? AND user_id=?',(match[1],u['id'])).fetchone()
             if not row:raise HTTPException(404,'Plan not found.')
             org=row['org_id']
-        elif path=='/api/plan':
+        elif path in ('/api/plan', '/api/workspace/respond'):
             body=await request.json();org=body.get('target_org')
         else:org=request.headers.get('x-org-id')
         if org:

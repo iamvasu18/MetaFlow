@@ -438,6 +438,7 @@ class SalesforceCapabilityRegistry:
 
     # Flow and Apex support the contracts enforced by their validators.
     EXECUTABLE_METADATA_TYPES = {
+        "PermissionSet",
         "Flow",
         "CustomObject",
         "CustomField",
