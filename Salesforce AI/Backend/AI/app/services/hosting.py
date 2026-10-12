@@ -10,8 +10,8 @@ from starlette.staticfiles import StaticFiles
 
 def validate_hosted_environment():
     required = ('APP_DATABASE_URL', 'APP_REDIS_URL', 'APP_ENCRYPTION_KEY',
-                'APP_PUBLIC_URL', 'SF_OAUTH_CLIENT_ID', 'SF_OAUTH_CLIENT_SECRET',
-                'SF_OAUTH_CALLBACK_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_MODEL')
+                'APP_PUBLIC_URL',
+                'SF_OAUTH_CALLBACK_URL')
     missing = [name for name in required if not os.getenv(name, '').strip()]
     if missing:
         raise RuntimeError('Missing hosted configuration: ' + ', '.join(missing))
@@ -24,8 +24,8 @@ def validate_hosted_environment():
         raise RuntimeError('OAuth callback must match the public origin and /api/orgs/callback.')
     if os.getenv('APP_COOKIE_SECURE') != 'true' or os.getenv('APP_JOB_MODE') != 'external' or os.getenv('APP_BACKGROUND_JOBS') != 'true':
         raise RuntimeError('Hosting requires secure cookies and external background jobs.')
-    if os.getenv('AI_PROVIDER') != 'anthropic':
-        raise RuntimeError('This hosting configuration supports the Anthropic provider.')
+    if os.getenv('AI_PROVIDER') not in {'anthropic','openai','gemini'}:
+        raise RuntimeError('Choose a supported AI provider.')
     if not os.environ['APP_DATABASE_URL'].startswith(('postgresql://', 'postgres://')):
         raise RuntimeError('Hosting requires Postgres.')
 

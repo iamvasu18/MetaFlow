@@ -40,11 +40,12 @@ def http_pool():
 def encrypt_org_tokens(tokens,auth_host):
     from Backend.AI.app.services.integration_service import cipher
     import json
-    if auth_host not in {'https://login.salesforce.com','https://test.salesforce.com'}:
-        raise HTTPException(502,'Invalid Salesforce OAuth authorization host.')
+    from .oauth_connection import auth_host as validate_auth_host
+    auth_host=validate_auth_host(auth_host)
     if not isinstance(tokens,dict) or not all(isinstance(tokens.get(k),str) and tokens[k] for k in ('access_token','refresh_token','instance_url')):
         raise HTTPException(502,'Salesforce did not supply complete OAuth credentials.')
     value={key:tokens[key] for key in ('access_token','refresh_token','instance_url')}
+    if tokens.get('oauth_client'):value['oauth_client']=deepcopy(tokens['oauth_client'])
     value['instance_url']=instance_url(value['instance_url']);value['auth_host']=auth_host
     return cipher().encrypt(json.dumps(value).encode()).decode()
 
@@ -74,7 +75,9 @@ def load_org_tokens(owner,org):
     if not isinstance(value,dict):
         raise HTTPException(503,'Saved Salesforce credentials are invalid. Reconnect this org.')
     value['instance_url']=instance_url(value.get('instance_url'))
-    if value.get('auth_host') not in {'https://login.salesforce.com','https://test.salesforce.com'} or not all(isinstance(value.get(k),str) and value[k] for k in ('access_token','refresh_token')):
+    from .oauth_connection import auth_host as validate_auth_host
+    value['auth_host']=validate_auth_host(value.get('auth_host'))
+    if not all(isinstance(value.get(k),str) and value[k] for k in ('access_token','refresh_token')):
         raise HTTPException(503,'Saved Salesforce credentials are invalid. Reconnect this org.')
     if value['instance_url'].lower()!=instance_url(owned['instance']).lower():
         raise HTTPException(409,'Saved Salesforce instance changed. Reconnect this org.')
@@ -98,8 +101,8 @@ class SalesforceApiClient:
         with lock, shared_plan_lock('oauth-refresh:' + self.owner + ':' + self.org):
             saved=load_org_tokens(self.owner,self.org)
             if saved['access_token']!=failed_token:return saved
-            data={'grant_type':'refresh_token','refresh_token':saved['refresh_token'],'client_id':oauth_client()}
-            if os.getenv('SF_OAUTH_CLIENT_SECRET'):data['client_secret']=os.environ['SF_OAUTH_CLIENT_SECRET']
+            from .oauth_connection import refresh_credentials
+            data={'grant_type':'refresh_token','refresh_token':saved['refresh_token'],**refresh_credentials(saved)}
             try:response=(self.http or http_pool()).post(saved['auth_host']+'/services/oauth2/token',data=data)
             except httpx.HTTPError:raise HTTPException(503,'Salesforce token refresh could not be completed. Retry when connectivity is restored.') from None
             if response.status_code in {400,401,403}:raise HTTPException(409,'Salesforce authorization expired or was revoked. Reconnect this org in Settings.')

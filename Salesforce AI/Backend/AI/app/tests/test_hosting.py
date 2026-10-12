@@ -32,6 +32,8 @@ def test_hosted_config(monkeypatch):
         SF_OAUTH_CLIENT_SECRET='test',ANTHROPIC_API_KEY='test',ANTHROPIC_MODEL='test',
         APP_COOKIE_SECURE='true',APP_JOB_MODE='external',APP_BACKGROUND_JOBS='true',AI_PROVIDER='anthropic')
     for k,v in values.items(): monkeypatch.setenv(k,v)
+    for name in ('SF_OAUTH_CLIENT_ID','SF_OAUTH_CLIENT_SECRET','ANTHROPIC_API_KEY','ANTHROPIC_MODEL'):
+        monkeypatch.delenv(name, raising=False)
     validate_hosted_environment()
     monkeypatch.setenv('APP_PUBLIC_URL','http://example.com')
     with pytest.raises(RuntimeError): validate_hosted_environment()
