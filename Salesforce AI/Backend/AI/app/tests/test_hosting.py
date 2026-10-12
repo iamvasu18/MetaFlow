@@ -10,10 +10,17 @@ def test_spa_preserves_api_and_blocks_paths(tmp_path):
     (tmp_path/'assets').mkdir()
     (tmp_path/'assets'/'app.js').write_text('console.log(1)')
     app=FastAPI()
+    @app.get('/')
+    def legacy_root(): return {'message':'backend running'}
+    @app.get('/health')
+    def health(): return {'status':'healthy'}
     @app.get('/api/example')
     def example(): return {'ok':True}
     install_frontend(app,tmp_path)
     client=TestClient(app)
+    assert client.get('/').headers['content-type'].startswith('text/html')
+    assert 'MetaFlow' in client.get('/').text
+    assert client.get('/health').json()=={'status':'healthy'}
     assert client.get('/workspace').status_code == 200
     assert client.get('/assets/app.js').status_code == 200
     assert client.get('/api/example').json() == {'ok':True}
