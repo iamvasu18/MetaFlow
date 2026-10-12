@@ -1,126 +1,91 @@
-# MetaFlow on Render: installation and operation
+# MetaFlow free demo on Render
 
-This update packages the existing approved-source workflow. It does not perform
-Salesforce deployments, copy your local database, or create paid cloud resources.
-The Render Blueprint provisions paid web/worker/Postgres/Key Value services in
-Singapore. Review the displayed charges before applying it. This is a demo
-hosting baseline, not a completed production security/backup/rollback program.
+## What changed
+The root render.yaml now explicitly selects free for the web service, Postgres
+and Key Value. There is NO paid background-worker service. deployment/demo.py
+supervises the existing web and worker commands as two child processes inside
+one web-service container. If either exits, it stops the other and exits so the
+whole instance can be restarted. SIGTERM stops both children. Existing durable
+Postgres jobs, source approval and explicit Salesforce deployment remain intact.
+This is a low-volume demo, not an always-on production deployment.
 
-## File locations
-Merge the update ZIP into Desktop/AI (repository root). render.yaml and
-.github/workflows/ci.yml belong there. The remaining files belong inside
-Salesforce AI. Existing main.py and job_worker.py are preserved: the container
-uses deployment/start.py to wrap their startup.
+## Costs and limitations
+Only apply a review showing Free / $0 for all three resources and $0 additional
+monthly compute charges. Never apply the older $34.50 Blueprint. Free compute
+has usage limits; remain on a free workspace and do not enable paid services or
+upgrade billing just to bypass a quota. Check Render's dashboard usage limits.
+Free web instances sleep after 15 minutes without incoming traffic and may take
+about a minute to wake. Web AND worker pause when sleeping. Browser polling
+while a demo job is active usually supplies inbound traffic; no guarantee of
+uninterrupted background execution after browsers close. PostgreSQL persists
+saved packages/jobs across instance restarts, subject to the DB lifetime.
+Free Postgres expires 30 days after creation (1GB limit; one per workspace).
+Export any demo data you need BEFORE expiry. Free Key Value is not persistent;
+notifications can disappear on restart. Jobs remain in Postgres and existing
+worker timed scans are the fallback. Do not depend on Redis for durable data.
+The 512MB web instance shares memory between Python web/worker and LWC checks.
+Limit simultaneous requests and large org contexts; load/memory tests are not
+complete. Cold starts and free-tier CPU can slow the demo.
 
-## Verify before cloud provisioning
-1. Stay on stage2-hosting-cd. Copy the files, inspect git diff, then build locally:
-   cd "Salesforce AI"
-   docker build -t metaflow-render .
-   Docker Desktop must be running. No local .env or application data is copied.
-2. Commit this update and push a PR. Wait for all CI jobs, including Render
-   container build, to pass. Merge, then pull main locally. Never deploy a build
-   whose image check failed. The startup unit tests are isolated; the container
-   CI checks Python/Node/LWC compiler presence and frontend output.
+Hosting free instances do NOT make arbitrary LLM APIs free. For a zero-cost AI
+demo, use an eligible Gemini Developer API free-tier project/model, confirm its
+free-tier quota in Google AI Studio, and do not enable paid billing. Use only
+supported text generateContent models. OpenAI/Claude remain available but may
+incur provider charges. MetaFlow cannot determine a key's billing tier from its
+text or prevent charges on a paid provider account. Save & verify makes a small
+model request. Check the provider's terms and use demo org metadata.
 
-## Shared credentials before creating the Blueprint
-In Render create an Environment Group named metaflow-shared. Add these values
-manually in its dashboard (never in Git or chat):
-- APP_ENCRYPTION_KEY: valid Fernet key. Use the EXISTING key if importing the
-  existing database; a different key cannot decrypt those tokens. For a brand-new
-  cloud database you may use a new Fernet key. Both services MUST share it.
-- Server SF_OAUTH_CLIENT_ID/SF_OAUTH_CLIENT_SECRET are optional legacy defaults.
-  New connections enter their own OAuth app credentials in Settings > Salesforce.
-- ANTHROPIC_API_KEY/ANTHROPIC_MODEL are optional server defaults. Users configure
-  their own Anthropic key/model through Settings > AI provider.
-The Blueprint creates/updates the same group with nonsecret flags. Omitted
-existing keys are preserved. Do not use generateValue separately per service.
+## Install and verify
+Merge this update into Desktop/AI (repo root), preserving folders.
+Create a new feature branch, review changes, and run from Salesforce AI:
+  docker build -t metaflow-render .
+  docker run --rm --entrypoint python -e PYTHONPATH=/app metaflow-render deployment/check_image.py
+  docker run --rm --entrypoint python -e PYTHONPATH=/app -e APP_DATABASE_URL= -e APP_DATABASE=/tmp/demo-tests.sqlite3 -e APP_JOB_MODE=embedded -e APP_BACKGROUND_JOBS=false metaflow-render -m pytest Backend/AI/app/tests/test_demo_hosting.py Backend/AI/app/tests/test_hosting.py -q
+Commit, push a PR, wait for backend/frontend/container CI, merge and pull main.
+The generated update's supervisor tests use fake processes; live Render startup
+and memory behavior still require verification. No cloud resources were created.
 
-## Provision the application
-Choose New > Blueprint, select MetaFlow, main, and root render.yaml. Review the
-four resources, region and charges before applying. The Blueprint references
-private Postgres/Key Value connections; it does not expose their external ports.
-APP_PUBLIC_URL is derived from metaflow-web's RENDER_EXTERNAL_URL for both web
-and worker; callback is computed as that origin + /api/orgs/callback. A custom
-APP_PUBLIC_URL/SF_OAUTH_CALLBACK_URL must be configured consistently on both
-services if you later use a custom domain.
+## Render setup
+Cancel/back out of the unsubmitted paid Blueprint review. Preserve the existing
+metaflow-shared Environment Group and its APP_ENCRYPTION_KEY. Don't regenerate
+this key. After the free update is merged, reload the Blueprint from main with
+root render.yaml. Expect exactly metaflow-web, metaflow-db and
+metaflow-notifications. Keep Associate existing services so the encryption group
+is retained. No metaflow-worker service should be created. Review the $0 plans
+before applying. If resources were already created with paid plans, stop and
+check billing/resources before changing/deleting them; a YAML update alone is
+not evidence that paid resources stopped billing.
 
-Register the EXACT new HTTPS callback URL in your Salesforce OAuth app before
-connecting any org. Keep the existing localhost callback if you still use it.
-No Salesforce username/password is entered into the Render environment.
+The Blueprint adds shared secure-cookie/job flags and defaults AI_PROVIDER to
+gemini. No server Salesforce or AI key is required. Private database connection
+strings are injected automatically. APP_PUBLIC_URL follows the web service's
+Render HTTPS URL, and start.py derives the callback /api/orgs/callback.
+The cloud database starts empty; local Docker Postgres is not migrated or changed.
 
-The cloud database starts EMPTY. Sign up/log in and connect a demo org there.
-Your local Docker Postgres data remains local; this update does not migrate it.
-If you require existing chats/accounts, stop and plan a PG backup/restore with
-the original encryption key. Do not restore into a database containing new data.
+## Live smoke test
+Wait for metaflow-web to be live. /health checks liveness and /ready checks
+Postgres; supervisor termination reacts if web or worker exits. /ready does not
+prove AI, Salesforce or Redis access. Inspect web and worker startup logs.
+Open /login or /workspace directly, sign up, then Settings:
+- Salesforce: choose environment, My Domain URL, username, Consumer Key/Secret.
+  Register the exact callback shown in your Salesforce External Client App.
+  Enable Authorization Code/PKCE and api/refresh_token scopes. Log in/authorize
+  on Salesforce. Tokens and custom OAuth credentials are encrypted per org.
+- AI provider: choose Gemini, enter a free-tier key and supported model, Save &
+  verify. Secrets are encrypted per account and not returned to the browser.
+Generate one small plan, review source, approve for validation and explicitly
+confirm deployment to a demo org. Check the created component in Salesforce.
+Test a restart and idle wake separately; free hosting is not production-ready.
 
-## Checks after deployment
-- /health: application liveness; /ready: Postgres read succeeds. Readiness does
-  NOT certify Salesforce, AI, Redis or the worker. Redis outages retain the
-  existing timed Postgres scans.
-- Open /login and /workspace directly; page refresh should work.
-- Verify signup/login, OAuth connect, chat generation, approval/check-only
-  validation, and explicit deployment to a demo org. Verify the real component
-  in Salesforce. No paid resource, live login, or deployment was tested by the
-  generated update's local tests.
-- Confirm worker structured startup/job events and request IDs in web logs.
-- Restart the worker during a queued task and verify existing recovery behavior.
-- Local development still uses the original Uvicorn and npm commands.
+## CI/CD and later transition
+GitHub runs tests, evaluations, frontend audits/build and image build checks.
+Render autoDeployTrigger checksPass deploys main after CI passes. Initial
+Blueprint creation/manual deploys still need review. Local Docker builds package
+software; Render runs that packaging on its infrastructure, not your laptop's
+Postgres/Redis containers. Nothing automatically deploys Salesforce metadata.
 
-## CI/CD and Docker responsibilities
-GitHub CI runs regression/replay, frontend tests/audits/build and a container
-build. Render autoDeployTrigger checksPass deploys commits to main after checks
-pass. Initial Blueprint creation and manual deploys are separate actions; inspect
-CI before using them. Render independently builds web and worker images from
-that commit; updates are NOT an atomic multi-service release.
-
-Docker packages Python, Node, the LWC checker and compiled React. It does not
-run your local Docker databases in Render. Render manages separate Postgres and
-Redis-compatible Key Value resources. Saved workspace packages contain source
-in Postgres; local temporary staging is recreated for API operations, so there
-is no shared disk. Legacy local file-only endpoints/CLI paths are not promoted
-to durable hosted workflows. No Salesforce CLI is installed in this image.
-
-The container runs one nonroot web process and one independent worker service.
-Do not increase workers/instances before concurrency/load and migration tests.
-Graceful SIGTERM handling exists in the worker, but in-flight external requests
-and ambiguous Salesforce outcomes still require recovery/status verification.
-
-## Limits and rollback
-New dependency installs are governed by existing requirements.txt (Python is not
-yet fully locked). Image build/runtime checks must pass in CI. An actual Docker
-build was not available in the assistant's environment; verify locally/CI.
-
-Render's code rollback is not a database rollback or Salesforce rollback. Keep
-managed database backups and review schema compatibility before rollback.
-Role-based approvals, production promotion, Salesforce predeploy backup and
-rollback, security review and error-tracking integrations remain future work.
-The existing application allows account registration; restrict audience/use
-before exposing customer or production orgs. Keep credentials out of logs.
-
-
-## User-owned Salesforce OAuth applications
-New connections use Settings > Salesforce: environment, exact My Domain URL,
-Salesforce username, Consumer Key and Consumer Secret. The UI displays the exact
-callback URL to register in each user's OAuth app. API + refresh_token scopes
-and Authorization Code / PKCE support are required. Users then log in and grant
-access on Salesforce itself; no Salesforce password/security token is collected.
-Only Salesforce My Domain HTTPS hosts are accepted. The authenticated username
-and returned instance must match the submitted identity; mismatches are rejected.
-Secrets are encrypted in pending OAuth state (10 minute expiration) and then in
-that connection's token payload. Existing server-app connections retain their
-old refresh behavior; new custom-app refresh/reconnect uses its saved credentials.
-Removing an app connection removes its tokens; it does not revoke Salesforce's
-OAuth grant. Secret rotation requires reconnecting with new credentials. Supply
-new credentials by using the connection form when the old app secret is revoked.
-The provider UI supports Anthropic Claude, OpenAI Responses-compatible text
-models, and Gemini Developer API generateContent-compatible text models. Azure
-OpenAI, Vertex AI, arbitrary gateways and non-text models are not supported.
-Select a provider, enter its own key/model, then Save & verify. OpenAI/Gemini
-verification makes a small billable text request. Keys are account-scoped and
-encrypted; changing providers never reuses another provider's saved key.
-OpenAI/Gemini use fixed HTTPS endpoints, real input-token counts, bounded
-timeouts, no automatic network retries and reject incomplete output.
-Set AI_MAX_INPUT_TOKENS/AI_MAX_OUTPUT_TOKENS on the server if needed; actual
-model limits still apply. Optional server defaults use OPENAI_API_KEY/OPENAI_MODEL
-or GEMINI_API_KEY/GEMINI_MODEL with AI_PROVIDER matching that provider.
-Live provider billing, access and model output quality require smoke tests.
+After demo acceptance, plan paid independent workers, backups, scaling/security,
+error tracking and production controls. Code rollback does not roll back the
+Postgres schema or Salesforce changes. Keep the encryption key safe and stable.
+References: https://render.com/docs/free ; https://render.com/docs/blueprint-spec ;
+https://ai.google.dev/gemini-api/docs/pricing
