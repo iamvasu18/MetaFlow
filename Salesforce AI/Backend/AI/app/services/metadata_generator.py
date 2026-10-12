@@ -194,6 +194,10 @@ class SalesforceMetadataGenerator:
 
         safe_source_target(self.project_root, component_path(item.metadataType, item.fullName).as_posix())
 
+        if item.metadataType == "PermissionSet":
+            from Backend.AI.app.services.permission_set_service import generate_permission_set
+            return generate_permission_set(item, self.project_root)
+
         if item.metadataType == "Flow":
             from Backend.AI.app.services.flow_generator import generate_flow
             return generate_flow(item, self.project_root)

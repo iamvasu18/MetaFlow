@@ -1200,6 +1200,12 @@ def _validate_metadata_item_config(
             warnings,
         )
 
+    elif item.metadataType == "PermissionSet":
+        if item.action == "CREATE":
+            from Backend.AI.app.services.permission_set_service import validate_permission_set
+            try: validate_permission_set(item.fullName, item.label, item.config)
+            except ValueError as exc: errors.append(f"{item.id}: Invalid Permission Set configuration: {exc}")
+
     elif item.metadataType == "Flow":
 
         _validate_flow(
@@ -1409,7 +1415,7 @@ def validate_plan(
                 f"{item.id}: fullName cannot be empty"
             )
 
-        if item.metadataType in {"CustomObject", "CustomField", "ValidationRule", "Flow", "ApexClass", "ApexTrigger", "LightningComponentBundle"}:
+        if item.metadataType in {"CustomObject", "CustomField", "ValidationRule", "Flow", "PermissionSet", "ApexClass", "ApexTrigger", "LightningComponentBundle"}:
             from Backend.AI.app.services.metadata_safety import validate_component_name
             try:
                 validate_component_name(item.metadataType, item.fullName)

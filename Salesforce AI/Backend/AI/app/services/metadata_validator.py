@@ -159,7 +159,7 @@ class SalesforceMetadataValidator:
         file for a plan item.
         """
 
-        if item.metadataType in {"Flow", "ValidationRule", "ApexClass", "ApexTrigger"}:
+        if item.metadataType in {"Flow", "ValidationRule", "ApexClass", "ApexTrigger", "PermissionSet"}:
             from Backend.AI.app.services.profile_fls_service import component_path
             return self.project_root / component_path(item.metadataType, item.fullName)
 

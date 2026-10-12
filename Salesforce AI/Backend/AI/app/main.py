@@ -5,6 +5,10 @@ from Backend.AI.app.services.page_layout_service import PageLayoutService
 import json
 import logging
 import time
+from Backend.AI.app.services.observability import (
+    configure_logging,
+    RequestLoggingMiddleware,
+)
 from Backend.AI.app.services.profile_fls_service import (
     SystemAdministratorFLSService,
     initialize_deployment_project,
@@ -82,6 +86,8 @@ app = FastAPI(
 )
 app.include_router(account_router)
 app.middleware("http")(account_guard)
+configure_logging()
+app.add_middleware(RequestLoggingMiddleware)
 
 
 # ==================================================
@@ -472,6 +478,24 @@ def get_flow_capabilities():
 def get_flow_config_schema():
     from Backend.AI.app.validators.flow_validator import flow_config_json_schema
     return {"$schema": "https://json-schema.org/draft/2020-12/schema", **flow_config_json_schema()}
+
+
+from Backend.AI.app.services.conversation_service import ConversationTurn
+
+
+@app.post("/api/workspace/respond")
+def respond_to_workspace(request: ConversationTurn):
+    if request.target_org != target_org():
+        raise HTTPException(403, 'Select your connected workspace org.')
+    from Backend.AI.app.services.conversation_service import respond
+    from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+    def api_factory():
+        transport = owned_metadata_api(request.target_org, default_pipeline.version())
+        return transport.api if transport is not None else None
+    try:
+        return respond(request, get_ai_provider(), api_factory)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/api/plan")
@@ -2013,7 +2037,7 @@ def report_default_package(plan_id:str):
     package=metadata_spec_store.get_package(plan_id)
     if not package or not package.get('jobId'):
         raise HTTPException(409,'No saved Salesforce job ID. Inspect Salesforce Deployment Status.')
-    if package['state'] not in {'pending','unknown'}:
+    if package['state'] not in {'pending','unknown','failed'}:
         return default_package_response(plan_id)
     try:
         return save_default_result(plan_id,package,default_pipeline.report(package),package['operation'])
@@ -2022,6 +2046,36 @@ def report_default_package(plan_id:str):
 
 class RevisionRequest(BaseModel):
     requirement:str=Field(min_length=1,max_length=20000)
+
+
+class PermissionAssignmentRequest(BaseModel):
+    component_name: str = Field(min_length=1,max_length=80)
+    source_hash: str = Field(min_length=64,max_length=64)
+    username: str = Field(min_length=1,max_length=320)
+    confirmed: bool = False
+
+
+@app.post('/api/plans/{plan_id}/assign-permission-set')
+@layout_workflow.locked
+def assign_default_permission_set(plan_id:str,request:PermissionAssignmentRequest):
+    from Backend.AI.app.account_api import current_account,current_org,record_activity
+    from Backend.AI.app.services.permission_set_service import PermissionAssignmentService
+    from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
+    package=metadata_spec_store.get_package(plan_id)
+    if not package:raise HTTPException(404,'Saved package not found.')
+    if package.get('targetOrg')!=current_org.get():raise HTTPException(403,'Select the saved target org.')
+    if request.source_hash!=package.get('sourceHash') or package.get('approvedHash')!=package.get('sourceHash'):raise HTTPException(409,'Review the exact deployed source before assigning access.')
+    try:
+        default_pipeline.verify_package(package)
+        transport=owned_metadata_api(package['targetOrg'],package['apiVersion'])
+        if not transport:raise ValueError('An authenticated Salesforce connection is required.')
+        outcome=PermissionAssignmentService(transport).assign(package,request.component_name,request.username,request.confirmed,metadata_spec_store.save_package)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+    if not outcome.get('alreadyAssigned'):
+        from Backend.AI.app.services.planning_performance import invalidate_org_context
+        invalidate_org_context(current_account.get(),package['targetOrg'])
+    record_activity(current_account.get(),package['targetOrg'],plan_id,'permission_set_assignment_checked' if outcome.get('alreadyAssigned') else 'permission_set_assigned','Permission Set assignment confirmed',request.component_name)
+    return dict(default_package_response(plan_id),assignmentResult=outcome)
 
 
 class FlowActivationRequest(BaseModel):

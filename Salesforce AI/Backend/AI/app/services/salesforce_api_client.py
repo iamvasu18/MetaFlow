@@ -171,6 +171,16 @@ class SalesforceApiClient:
         return payload
 
     def list_components(self,kind):
+        if kind == 'PermissionSet':
+            rows = self.query('SELECT Name, Label, NamespacePrefix FROM PermissionSet WHERE IsOwnedByProfile = false')['records']
+            result = []
+            for row in rows:
+                name, namespace = row.get('Name'), row.get('NamespacePrefix')
+                if not isinstance(name,str) or not _NAME.fullmatch(name) or (namespace and not _NAME.fullmatch(namespace)):
+                    raise ValueError('Salesforce returned an invalid Permission Set identity.')
+                result.append({'fullName': (namespace+'__' if namespace else '')+name, 'label': row.get('Label')})
+            return result
+
         fields={'ApexClass':('ApexClass','Name'),'ApexTrigger':('ApexTrigger','Name'),
             'LightningComponentBundle':('LightningComponentBundle','DeveloperName'),'Flow':('FlowDefinition','DeveloperName')}
         if kind not in fields:raise ValueError('Unsupported API component inventory type.')

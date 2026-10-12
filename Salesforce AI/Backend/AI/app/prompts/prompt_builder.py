@@ -489,11 +489,14 @@ def build_planning_prompt(
 {CUSTOM_OBJECT_POLICY_PROMPT}
 """.strip()
 
-    if re.search(r"\bflows?\b", requirement, re.IGNORECASE):
+    if True:  # Method selection may choose Flow even when the user never names it.
         from Backend.AI.app.validators.flow_validator import flow_config_json_schema
-        final_prompt += "\n\n" + FLOW_RESOURCE_NAMING_RULES
+        final_prompt += "\n\n" + FLOW_RESOURCE_NAMING_RULES + "\nChoose the implementation method from the requirement and verified context. For same-record updates prefer before-save record-triggered Flow with an Assignment and no extra Update Records operation. Use RecordTriggered (not RecordTriggeredFlow), supply required labels/status, use assignments/next/field/value keys from the schema, and end branches with null. Do not introduce a Decision-Assignment cycle. Respect explicit user technology choices or report a limitation."
         final_prompt += "\n\n<FLOW_CONFIG_SCHEMA>\n" + json.dumps(flow_config_json_schema(), separators=(",", ":")) + "\n</FLOW_CONFIG_SCHEMA>"
 
+    if re.search(r"\bpermission[- ]?sets?\b", requirement, re.I):
+        from Backend.AI.app.services.permission_set_service import PermissionSetConfig
+        final_prompt += "\n\nPermissionSet supports CREATE only. Use exact verified object/field/class API names and minimal explicitly requested grants. Label is required. Do not create or edit Profiles to satisfy this request. PermissionSet XML does not assign users. Declare item dependencies for same-plan new references. Use this exact config schema: " + json.dumps(PermissionSetConfig.model_json_schema())
     final_prompt += "\n\n" + VALIDATION_RULE_FORMULA_RULES
     return final_prompt
 
@@ -611,6 +614,10 @@ def build_metadata_prompt(
 
 {metadata_prompt}
 """.strip()
+
+    if any(item.get("metadataType") == "PermissionSet" for item in implementation_plan.get("items", [])):
+        from Backend.AI.app.services.permission_set_service import PermissionSetConfig
+        final_prompt += "\n\nPermission Set config schema: " + json.dumps(PermissionSetConfig.model_json_schema())
 
     if any(item.get("metadataType") == "Flow" for item in implementation_plan.get("items", [])):
         from Backend.AI.app.validators.flow_validator import flow_config_json_schema

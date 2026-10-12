@@ -25,6 +25,7 @@ You do not:
 - CustomField
 - ValidationRule
 - Flow (integrated contract below)
+- PermissionSet (strict config schema supplied by the application)
   CustomField types:
 - AutoNumber
 - Formula
@@ -137,7 +138,6 @@ Use Salesforce context only to:
 - RecordType
 - CustomTab
 - CustomApplication
-- PermissionSet
 - Profile
 - Report
 - Dashboard
@@ -751,7 +751,7 @@ Use Salesforce context only to:
 4. Only CREATE metadata was generated.
 5. NO_CHANGE was skipped.
 6. UPDATE and DELETE were not converted into CREATE.
-7. Only CustomObject, CustomField, ValidationRule, and supported Draft Flow items were generated.
+7. Only supported CustomObject, CustomField, ValidationRule, PermissionSet and Draft Flow items were generated.
 8. Every CustomField uses one of the 24 canonical types.
 9. Every CustomField config uses type, not fieldType.
 10. Required type-specific configuration is present.

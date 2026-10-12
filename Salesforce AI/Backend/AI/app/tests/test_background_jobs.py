@@ -164,3 +164,19 @@ def test_unrestorable_running_submission_becomes_unknown_not_stuck_running(clien
     deploy.assert_not_called()
     assert jobs.get_owned(tracked['jobId'],'u')['state']=='unknown'
     assert client.get('/api/plans/PLAN-old/status').json()['state']=='unknown'
+
+def test_parallel_chats_queue_but_duplicate_chat_generation_is_rejected(client):
+    with accounts.db() as connection:
+        for name in ('chat-a', 'chat-b'):
+            connection.execute('INSERT INTO workspace_conversations VALUES(?,?,?,?,?)',(name,'u','app_ours',name,0))
+    first=scoped(jobs.enqueue,'generate',{'conversation_id':'chat-a','request':{}},key='a')
+    other=scoped(jobs.enqueue,'generate',{'conversation_id':'chat-b','request':{}},key='b')
+    assert first['jobId'] != other['jobId']
+    assert scoped(jobs.enqueue,'generate',{'conversation_id':'chat-a','request':{}},key='a')['jobId']==first['jobId']
+    with pytest.raises(main.HTTPException) as exc:
+        scoped(jobs.enqueue,'generate',{'conversation_id':'chat-a','request':{}},key='another-key')
+    assert exc.value.status_code==409
+    with accounts.db() as connection:
+        connection.execute("UPDATE background_jobs SET state='succeeded' WHERE id=?",(first['jobId'],))
+    next_job=scoped(jobs.enqueue,'generate',{'conversation_id':'chat-a','request':{}},key='next-key')
+    assert next_job['jobId'] != first['jobId']

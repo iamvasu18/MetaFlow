@@ -149,6 +149,7 @@ This prompt must NOT:
    - CustomField
    - ValidationRule
    - Flow (integrated contract below)
+   - PermissionSet (strict config schema supplied by the application)
      Currently executable CustomField types:
    - AutoNumber
    - Checkbox

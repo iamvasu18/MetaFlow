@@ -27,6 +27,7 @@ SUPPORTED_METADATA_TYPES = {
     "CustomField",
     "ValidationRule",
     "Flow",
+    "PermissionSet",
     "ApexClass",
     "ApexTrigger",
 }
@@ -148,6 +149,7 @@ class MetadataItem(BaseModel):
         "CustomField",
         "ValidationRule",
         "Flow",
+        "PermissionSet",
         "ApexClass",
         "ApexTrigger",
     ]
@@ -186,6 +188,10 @@ class MetadataItem(BaseModel):
 
         elif self.metadataType == "ValidationRule":
             self._validate_validation_rule()
+
+        elif self.metadataType == "PermissionSet":
+            from Backend.AI.app.services.permission_set_service import validate_permission_set
+            validate_permission_set(self.fullName, self.label, self.config)
 
         elif self.metadataType == "Flow":
             from Backend.AI.app.validators.flow_validator import validate_flow
