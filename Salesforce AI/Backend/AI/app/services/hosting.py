@@ -36,6 +36,15 @@ def install_frontend(app, directory):
         raise RuntimeError('Frontend build is missing.')
     app.mount('/assets', StaticFiles(directory=root / 'assets'), name='frontend_assets')
 
+    @app.get('/', include_in_schema=False)
+    def frontend_home():
+        return FileResponse(root / 'index.html', headers={'Cache-Control': 'no-cache'})
+
+    # main.py already has a GET / status route. In hosted mode the SPA must
+    # precede it; retain all existing API/health routes and local behavior.
+    app.router.routes.insert(0, app.router.routes.pop())
+
+
     @app.get('/{frontend_path:path}', include_in_schema=False)
     def frontend(frontend_path: str):
         if frontend_path.split('/')[0] in {'api', 'health', 'ready', 'assets'}:
