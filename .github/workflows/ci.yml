@@ -6,6 +6,7 @@ on:
       - main
       - stage2-ci-observability
       - stage2-observability
+      - stage2-hosting-cd
   pull_request:
     branches:
       - main
@@ -76,6 +77,7 @@ jobs:
           Backend/AI/app/tests/test_flow_activation.py
           Backend/AI/app/tests/test_metadata_api_transport.py
           Backend/AI/app/tests/test_repair_reliability.py
+          Backend/AI/app/tests/test_hosting.py
           -q
 
       - name: Run replay evaluations
@@ -115,3 +117,16 @@ jobs:
 
       - name: Build frontend
         run: npm run build
+
+  container:
+    name: Render container build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build hosting image
+        run: docker build -t metaflow-ci "Salesforce AI"
+      - name: Verify packaged runtimes and application
+        run: docker run --rm --entrypoint python -e PYTHONPATH=/app metaflow-ci deployment/check_image.py
