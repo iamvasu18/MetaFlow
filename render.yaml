@@ -1,0 +1,86 @@
+# Paid services: review Render's displayed charges before provisioning.
+services:
+  - type: web
+    name: metaflow-web
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    branch: main
+    dockerContext: Salesforce AI
+    dockerfilePath: Salesforce AI/Dockerfile
+    dockerCommand: python deployment/start.py web
+    healthCheckPath: /ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - fromGroup: metaflow-shared
+      - key: APP_PUBLIC_URL
+        fromService:
+          type: web
+          name: metaflow-web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: APP_DATABASE_URL
+        fromDatabase:
+          name: metaflow-db
+          property: connectionString
+      - key: APP_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: metaflow-notifications
+          property: connectionString
+  - type: worker
+    name: metaflow-worker
+    runtime: docker
+    plan: 0.5c-512mb
+    region: singapore
+    branch: main
+    dockerContext: Salesforce AI
+    dockerfilePath: Salesforce AI/Dockerfile
+    dockerCommand: python deployment/start.py worker
+    autoDeployTrigger: checksPass
+    envVars:
+      - fromGroup: metaflow-shared
+      - key: APP_PUBLIC_URL
+        fromService:
+          type: web
+          name: metaflow-web
+          envVarKey: RENDER_EXTERNAL_URL
+      - key: APP_DATABASE_URL
+        fromDatabase:
+          name: metaflow-db
+          property: connectionString
+      - key: APP_REDIS_URL
+        fromService:
+          type: keyvalue
+          name: metaflow-notifications
+          property: connectionString
+  - type: keyvalue
+    name: metaflow-notifications
+    region: singapore
+    plan: 256mb
+    ipAllowList: []
+    maxmemoryPolicy: noeviction
+
+databases:
+  - name: metaflow-db
+    region: singapore
+    plan: 0.1c-256mb
+    postgresMajorVersion: "17"
+    databaseName: metaflow
+    user: metaflow
+    ipAllowList: []
+
+envVarGroups:
+  - name: metaflow-shared
+    envVars:
+      - key: APP_JOB_MODE
+        value: external
+      - key: APP_BACKGROUND_JOBS
+        value: "true"
+      - key: APP_COOKIE_SECURE
+        value: "true"
+      - key: PYTHON_DOTENV_DISABLED
+        value: "1"
+      - key: AI_PROVIDER
+        value: anthropic
+      - key: APP_LOG_LEVEL
+        value: INFO

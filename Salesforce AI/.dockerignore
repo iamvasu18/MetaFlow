@@ -1,0 +1,17 @@
+.git
+**/.env
+**/.env.*
+**/.venv
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+.app-data
+stage2c-backup
+runtime
+.sf
+.sfdx
+force-app
+Frontend/dist
+verification
+**/*.log
