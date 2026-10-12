@@ -80,6 +80,7 @@ jobs:
           Backend/AI/app/tests/test_hosting.py
           Backend/AI/app/tests/test_oauth_connection.py
           Backend/AI/app/tests/test_multi_provider.py
+          Backend/AI/app/tests/test_demo_hosting.py
           -q
 
       - name: Run replay evaluations

@@ -1,41 +1,15 @@
-# Paid services: review Render's displayed charges before provisioning.
+# Free 30-day demo. Review the dashboard: every instance must show Free / $0.
 services:
   - type: web
     name: metaflow-web
     runtime: docker
-    plan: 0.5c-512mb
+    plan: free
     region: singapore
     branch: main
     dockerContext: Salesforce AI
     dockerfilePath: Salesforce AI/Dockerfile
-    dockerCommand: python deployment/start.py web
+    dockerCommand: python deployment/demo.py
     healthCheckPath: /ready
-    autoDeployTrigger: checksPass
-    envVars:
-      - fromGroup: metaflow-shared
-      - key: APP_PUBLIC_URL
-        fromService:
-          type: web
-          name: metaflow-web
-          envVarKey: RENDER_EXTERNAL_URL
-      - key: APP_DATABASE_URL
-        fromDatabase:
-          name: metaflow-db
-          property: connectionString
-      - key: APP_REDIS_URL
-        fromService:
-          type: keyvalue
-          name: metaflow-notifications
-          property: connectionString
-  - type: worker
-    name: metaflow-worker
-    runtime: docker
-    plan: 0.5c-512mb
-    region: singapore
-    branch: main
-    dockerContext: Salesforce AI
-    dockerfilePath: Salesforce AI/Dockerfile
-    dockerCommand: python deployment/start.py worker
     autoDeployTrigger: checksPass
     envVars:
       - fromGroup: metaflow-shared
@@ -56,14 +30,15 @@ services:
   - type: keyvalue
     name: metaflow-notifications
     region: singapore
-    plan: 256mb
+    plan: free
     ipAllowList: []
     maxmemoryPolicy: noeviction
+    persistenceMode: off
 
 databases:
   - name: metaflow-db
     region: singapore
-    plan: 0.1c-256mb
+    plan: free
     postgresMajorVersion: "17"
     databaseName: metaflow
     user: metaflow
@@ -81,6 +56,6 @@ envVarGroups:
       - key: PYTHON_DOTENV_DISABLED
         value: "1"
       - key: AI_PROVIDER
-        value: anthropic
+        value: gemini
       - key: APP_LOG_LEVEL
         value: INFO
