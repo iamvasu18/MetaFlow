@@ -104,7 +104,7 @@ def test_validation_before_deploy_and_repeat_blocked(workflow):
 def test_name_collision(service):
     service.cli=Mock(return_value={'result':[{'fullName':'accountSearch'}]})
     with pytest.raises(ValueError,match='already exists'):
-        service.ensure_new({'componentName':'accountSearch','targetOrg':'AIOrg'})
+        service.ensure_new({'componentName':'accountSearch','targetOrg':'AIOrg','apiVersion':'67.0'})
 
 def test_unknown_result_blocks_retry(workflow):
     bundle=generate(workflow)

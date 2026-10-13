@@ -30,6 +30,7 @@ class Intent(BaseModel):
     field: str = Field(default='', max_length=255)
     objects: list[str] = Field(default_factory=list, max_length=10)
     components: list[dict[str, str]] = Field(default_factory=list, max_length=10)
+    blocking_detail: Literal['parent_object', 'behavior', 'relationship_target', 'access', 'identity_conflict'] | None = None
     create_new: bool = False
     code_kind: Literal['ApexClass', 'LightningComponentBundle'] | None = None
     reuse_decision: Literal['reuse', 'create_new', 'extend'] | None = None
@@ -38,7 +39,15 @@ class Intent(BaseModel):
 
 SYSTEM = '''You are the conversational front door of a Salesforce implementation workspace.
 Use plain text for response, without Markdown headings or bold markers.
-Return exactly JSON with action, response, requirement, field, objects, components, create_new, requested_type, code_kind, reuse_decision.
+Clarify only a genuine blocker. Set blocking_detail to parent_object, behavior,
+relationship_target, access or identity_conflict; otherwise null and proceed with defaults.
+Ask ONE short question, no numbered list, preamble, examples or optional questions.
+Remember supplied names and answers; never ask for those again. Default ordinary fields
+without an explicit type to Text(255), recording the assumption. Do not ask business purpose,
+length, labels, optional display fields or names when they can be defaulted.
+For Flow/Apex/LWC ask about behavior only if the actual behavior cannot be inferred.
+Permission grants and relationship targets must not be invented.
+Return exactly JSON with action, response, requirement, field, objects, components, create_new, requested_type, code_kind, reuse_decision, blocking_detail.
 For existing code/functionality questions use find_code and set code_kind to ApexClass or LightningComponentBundle. Set code_kind for new Apex/LWC build requests too: existing source will be inspected before planning. Extract named components even from short contextual answers such as Object Field Searcher. reuse_decision is null initially; set it only for explicit follow-up choices to reuse unchanged, create a separate new component, or extend existing source.
 requested_type identifies what the user wants created, not a referenced parent object; null for non-create questions.
 Set create_new=true only when the user requests creating that named field/component;
@@ -79,12 +88,42 @@ must contain the resolved implementation request. Preserve explicit technology c
 The installed workflow builds CustomObject, CustomField, ValidationRule, Flow, ApexClass,
 ApexTrigger, LightningComponentBundle and PermissionSet drafts; supports approved validation/deployment,
 Flow activation, AI source repair, and configured Jira story import. Live conversation reads
-object catalogs, object field descriptions, and named Apex/Flow/LWC/PermissionSet inventories. Permission Set creation supports explicit object CRUD, field read/edit permissions, Apex class access and org-exposed system permissions. Ask the intended access, objects/fields and Permission Set identity when absent. Never add View All, Modify All, administrative system permissions or user assignments unless explicitly requested. An empty Permission Set can be created only if explicitly requested as empty. Permission Sets add access; they do not revoke access granted by profiles or other Permission Sets. Explain this when the user asks to restrict effective access.
+object catalogs, object field descriptions, and named Apex/Flow/LWC/PermissionSet inventories. Permission Set creation supports explicit object CRUD, field read/edit permissions, Apex class access and org-exposed system permissions. Ask only for missing intended access; derive an ordinary name if not specified. Never add View All, Modify All, administrative system permissions or user assignments unless explicitly requested. An empty Permission Set can be created only if explicitly requested as empty. Permission Sets add access; they do not revoke access granted by profiles or other Permission Sets. Explain this when the user asks to restrict effective access.
 Existing Apex/LWC source comparison is available through find_code; it is bounded candidate inspection, not exhaustive whole-org proof. Permission Sets can be assigned only after deployment using the separate explicitly confirmed Assign to user control. It does not support arbitrary live record queries, running arbitrary org services, general
 UPDATE/rename operations, dependency/impact searches, or all other metadata types in this
 conversation route. Return unsupported with a specific friendly explanation when the user's
 requested operation is outside these capabilities. Do not imply Salesforce itself lacks it.
 For answer/clarify/unsupported, response is required. No metadata or source generation in this step.'''
+
+
+def concise_clarification(intent):
+    if intent.action != 'clarify':
+        return intent
+    blocker = intent.blocking_detail
+    if blocker == 'behavior' and (intent.requested_type == 'CustomObject' or (intent.requested_type == 'CustomField' and intent.objects) or re.search(r'\b(search|retrieve|query|display|set|send|calculate)\b', intent.requirement, re.I)):
+        blocker = None
+    if blocker == 'parent_object' and intent.objects:
+        blocker = None
+    if intent.requested_type == 'CustomField' and not intent.objects:
+        blocker = 'parent_object'
+    questions = {
+        'parent_object': f"Which object should I add {intent.field or 'this component'} to?",
+        'behavior': 'What should it do?',
+        'relationship_target': 'Which object should this relationship reference?',
+        'access': 'What access should this Permission Set grant?',
+        'identity_conflict': 'Should I reuse it unchanged, or create it with a different name?',
+    }
+    if blocker:
+        intent.response = questions[blocker]
+    elif intent.requested_type and intent.requirement and intent.requested_type != 'PermissionSet':
+        intent.action = 'build'
+        intent.response = ''
+        intent.requirement += '\nUse supported ordinary defaults and document assumptions. Retain all previously supplied details.'
+    else:
+        # Legacy/unknown intents still get a single question, never a questionnaire.
+        first = intent.response.split('?')[0].strip()
+        intent.response = first + '?' if first else 'What would you like to build?'
+    return intent
 
 
 def classify(payload, provider):
@@ -121,7 +160,7 @@ def classify(payload, provider):
             if attempt:
                 raise ValueError('I could not interpret this message reliably. Please rephrase it; no plan was generated.') from None
             payload['formatFeedback'] = {'error': str(exc)[:2000], 'instruction': 'Correct the specific schema/format error. Return JSON only. Use [] for unknown object/component lists and null for unknown requested_type. response must contain the actual user-facing answer or clarification.'}
-    return intent
+    return concise_clarification(intent)
 
 
 def apply_optional_defaults(intent, message, pending_requirement='', facts=None):
@@ -165,6 +204,11 @@ def respond(turn, provider, api_factory):
     message = turn.message.strip()
     if re.fullmatch(r'(hi|hello|hey|good morning|good afternoon|good evening)[!. ]*', message, re.I):
         return {'action': 'answer', 'response': 'Hi! What would you like to know or build in your Salesforce org?'}
+    field_match = re.fullmatch(r'(?:please\s+)?create\s+(?:a\s+|an\s+)?(?:field\s+(?:(?:named|called)\s+)?(.+)|(.+?)\s+field)[.! ]*', message, re.I)
+    if field_match and not turn.pending_requirement and not turn.reference_context and not turn.recent_messages:
+        label = (field_match.group(1) or field_match.group(2)).strip().rstrip('.')
+        if not re.search(r'\b(on|in|for|with|text|number|email|lookup|checkbox|picklist|date|formula)\b', label, re.I):
+            return {'action':'clarify','response':f'Which object should I add {label} to?', 'requirement':f'Create a field named {label}. Use Text(255) unless an explicit field type is supplied.'}
     payload = {'message': message, 'pendingRequirement': turn.pending_requirement,
                'pendingQuestion': turn.pending_question, 'referenceContext': turn.reference_context,
                'recentMessages': [message.model_dump() for message in turn.recent_messages]}
@@ -186,7 +230,20 @@ def respond(turn, provider, api_factory):
         if conflicts:
             return {'action':'clarify','response':f"{', '.join(conflicts)} already exists in the connected org. Reuse it unchanged, or give a distinct name for a new object?",'requirement':message}
         return {'action':'build','response':'','requirement':f'Create a standalone custom object named {basic}. Use the standard Name field and supported object defaults. Assumptions: no additional custom fields or relationships were requested. Record these assumptions in the plan.', 'requested_type':'CustomObject','create_new':True,'objects':[basic],'components':[]}
+    from Backend.AI.app.services.implementation_routing import prefers_home_search_lwc, resolve_ui_requirement
+    home_ui = prefers_home_search_lwc(message)
+    if home_ui:
+        payload.update(pendingRequirement='',pendingQuestion='',referenceContext='',recentMessages=[])
+        payload['implementationConstraint'] = resolve_ui_requirement(message)
     intent = apply_optional_defaults(classify(payload, provider), message, turn.pending_requirement)
+    if home_ui:
+        intent.action='build'
+        intent.requirement=resolve_ui_requirement(message)
+        intent.requested_type='LightningComponentBundle'
+        intent.code_kind='LightningComponentBundle'
+        intent.components=[c for c in intent.components if c.get('type')=='LightningComponentBundle']
+        intent.response=''
+
     if intent.code_kind is None and intent.requested_type in {'ApexClass', 'LightningComponentBundle'}:
         intent.code_kind = intent.requested_type
     if intent.action == 'unsupported':
@@ -239,16 +296,22 @@ def respond(turn, provider, api_factory):
         'If an object was not found in the accessible catalog, say so without claiming inaccessible metadata is absent. '
         'Do not ask permission to create an object the user already explicitly requested creating: acknowledge '
         'that new object and ask only unresolved essential behavior such as the intended email recipients. '
-        'Ask at most two essential questions. State reasonable optional defaults instead of a questionnaire. '
+        'Ask only one short question for a genuine blocker. State reasonable optional defaults instead of a questionnaire. '
         'Unavailable/failed reads are unknown, never absent. Do not invent fields or profile names.'
     )
     grounded = apply_optional_defaults(classify(payload, provider), message, turn.pending_requirement, facts)
+    if home_ui and grounded.action == 'build':
+        grounded.requirement = resolve_ui_requirement(message)
+        grounded.requested_type = 'LightningComponentBundle'
+        grounded.code_kind = 'LightningComponentBundle'
+        grounded.components = [c for c in grounded.components if c.get('type')=='LightningComponentBundle']
     # Existing identity conflicts cannot turn into a new-create draft in this turn.
     if intent.create_new and (facts['existingRequestedFields'] or facts['existingRequestedComponents'] or facts['existingRequestedObjects']):
         grounded.action = 'clarify'
         identities = facts['existingRequestedFields'] + facts['existingRequestedComponents'] + facts['existingRequestedObjects']
         if not grounded.response.strip() or not any(identity in grounded.response for identity in identities):
             grounded.response = 'Already found in your connected org: ' + ', '.join(identities) + '. Would you like to reuse it, or create a distinct component with a different name?'
+        grounded.response = ', '.join(identities) + ' already exists. Reuse it unchanged, or use a different name?'
         grounded.requirement = grounded.requirement or turn.pending_requirement or message
     if grounded.action == 'find_field':
         return find_fields(api, grounded.field, grounded.objects)

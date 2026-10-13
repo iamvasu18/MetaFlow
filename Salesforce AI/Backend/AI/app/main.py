@@ -2152,6 +2152,8 @@ def build_default_draft(requirement,org,provider,http_request=None,activity_titl
     from Backend.AI.app.services.metadata_service import DefaultGenerationRequest
     from Backend.AI.app.validators.plan_validator import ImplementationPlan
     from Backend.AI.app.account_api import user,db,save_chat,record_activity
+    from Backend.AI.app.services.implementation_routing import resolve_ui_requirement
+    requirement = resolve_ui_requirement(requirement)
     package=default_pipeline.generate(DefaultGenerationRequest(requirement=requirement,target_org=org),provider)
     if repair_package:
         old=repair_package
