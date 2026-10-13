@@ -407,17 +407,15 @@ export default function Workspace() {
             setInformation(`Required dependencies retained: ${reviewed.selectionAddedDependencies.join(', ')}. Review the updated selection and approve again.`);
             return;
           }
-          if (!reviewed.layoutReady) throw new Error('Complete layout choices for the selected draft before approving.');
+          setInformation('Selection saved. Salesforce validation runs on the changed draft before approval.');
+          return;
         }
         const path = `/plans/${encodeURIComponent(reviewed.id)}`;
         const options = action === 'refresh' ? { token } : { method: 'POST', token,
           ...(['deploy','approve'].includes(action) ? { body: { approved: true, source_hash: reviewed.sourceHash } } : {}) };
         const result = await apiRequest(kind, action === 'refresh' ? path : `${path}/${action}`, options);
         acceptBundle(result);
-        if (action === 'approve') {
-          setBusy('validate');
-          acceptBundle(await apiRequest(kind, `${path}/validate`, { method: 'POST', token }));
-        }
+
       }
     } catch (failure) {
       if (failure.detail?.code === 'NO_CHANGE_REQUIRED') { setInformation(failure.detail.message); setClarification(null); setError(''); await reply(threadId, failure.detail.message, 'no_change', answeredRequirement || requirement); return; }
@@ -513,7 +511,7 @@ export default function Workspace() {
           {busy === 'generate' && !bundle && !messages.length && tab === 'chat' && <div className="ws-user-message"><span>You</span><p>{requirement}</p></div>}
           {bundle && tab === 'chat' && <>
             {!messages.length && <div className="ws-user-message"><span>You</span><p>{bundle.requirement}</p></div>}
-            <div className="ws-assistant"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>I prepared a plan for your requirement in <strong>{orgName}</strong>.</p><p>{bundle.plan?.summary || bundle.componentName}</p><ul>{components.map(item => <li key={`${item.metadataType}:${item.fullName}`}><strong>{item.fullName}</strong> <span>— {item.metadataType}</span></li>)}</ul><p>Review the proposed changes and source files, then approve the plan. Approval starts Salesforce validation without deploying. Deploy appears immediately and becomes enabled after validation passes.</p></div></div>
+            <div className="ws-assistant"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>I prepared a plan for your requirement in <strong>{orgName}</strong>.</p><p>{bundle.plan?.summary || bundle.componentName}</p><ul>{components.map(item => <li key={`${item.metadataType}:${item.fullName}`}><strong>{item.fullName}</strong> <span>— {item.metadataType}</span></li>)}</ul><p>Review the proposed changes and source files, then approve the plan. Salesforce validation runs on the generated files without deploying. After it passes, approve the exact files to enable Deploy.</p></div></div>
           </>}
 
           {needsLayoutReview && <div className="ws-assistant"><div className="ws-avatar"><Bot size={20} /></div><section className="ws-response ws-layout-question">
@@ -547,7 +545,7 @@ export default function Workspace() {
             {bundle.state !== 'deployed' && <div className="ws-plan-footer">
               {canRevise && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => editPlan()}><Pencil size={15} />Edit request</button>}
               {!approved && !approving && bundle.state !== 'rejected' && <>
-                <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !bundle.layoutReady || layoutDirty || !selectedComponents.length} onClick={() => run(approved ? 'validate' : 'approve')}><ShieldCheck size={17} />Approve</button>
+                <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !bundle.layoutReady || layoutDirty || !selectedComponents.length || (!selectionDirty && (bundle.state !== 'validated' || bundle.validatedHash !== bundle.sourceHash))} onClick={() => run(approved ? 'validate' : 'approve')}><ShieldCheck size={17} />{selectionDirty ? 'Save selection and validate' : 'Approve'}</button>
                 {!approved && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('reject')}>Reject Plan</button>}
               </>}
               {(approved || approving) && bundle.state !== 'deployed' && <button className={buttonClass} disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canDeploy(bundle, approvedHash)} onClick={() => setConfirmDeploy(true)}>Deploy to {orgName}</button>}
@@ -577,7 +575,7 @@ export default function Workspace() {
           {repairEditor && <section className="ws-status"><h3>Fix with AI · {repairEditor}</h3><p>AI will use the saved error and this component’s source. Describe any additional correction you want.</p><textarea className="ws-input ws-edit-request" aria-label="AI correction instructions" value={repairInstruction} disabled={Boolean(busy || queuedGeneration)} onChange={event => setRepairInstruction(event.target.value)} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || (!repairInstruction.trim() && !canRepair)} onClick={() => run('repair', repairEditor)}>{busy === 'repair' ? 'Fixing…' : 'Apply AI fix'}</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setRepairEditor(null)}>Cancel</button></div></section>}
           {editRequest && <section className="ws-status"><h3>Edit {editRequest}</h3><p>Update the requirement or describe the component change. This generates a new draft; its files need fresh approval.</p><textarea className="ws-input ws-edit-request" value={editText} disabled={Boolean(busy || queuedGeneration)} onChange={event => setEditText(event.target.value)} aria-label="Updated requirement" /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !editText.trim()} onClick={() => run('revise')}>Generate revised plan</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setEditRequest(null)}>Cancel</button></div></section>}
           {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{packageErrors(bundle).map((message, index) => <p className="ws-error" key={index}>{message}</p>)}{bundle.state === 'failed' && bundle.jobId && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('report')}>Load Salesforce error details</button>}{bundle.lastResult?.result?.details?.componentFailures?.length > 0 && <ul className="ws-error">{bundle.lastResult.result.details.componentFailures.map((failure, index) => <li key={`${failure.fileName}:${index}`}><strong>{failure.fileName || failure.fullName}</strong>: {failure.problem}</li>)}</ul>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
-          {(approving || (approved && busy === 'validate')) && <div className="ws-status" role="status">Approved · Validating with Salesforce…</div>}
+          {(approving || (approved && busy === 'validate')) && <div className="ws-status" role="status">Saving approval…</div>}
           {busy && !generationInThisChat && <div className="ws-status" role="status"><span className="ws-spinner" />{['send','clarify','generate','fix-generation'].includes(busy) ? 'Thinking…' : busy === 'repair' ? 'AI is reviewing the saved failure and generating a corrected draft…' : busy === 'revise' ? 'Generating your revised plan…' : `${busy}: waiting for Salesforce…`}</div>}
           {information && <section className="ws-status" role="status"><h3>Workspace update</h3><p>{information}</p></section>}
           {clarification && !messages.some(message => message.role === 'assistant' && message.kind === 'clarification' && message.content === clarification.question) && <div className="ws-assistant" aria-live="polite"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{clarification.question}</p></div></div>}

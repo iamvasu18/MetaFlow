@@ -764,6 +764,8 @@ def approve_plan(
                 raise HTTPException(409,'Generate the reviewed files after completing layout selections.')
             if request is None or request.source_hash!=package['sourceHash']:
                 raise HTTPException(422,'Approval must identify the exact reviewed source hash.')
+            if package.get('state') != 'validated' or package.get('validatedHash') != package['sourceHash']:
+                raise HTTPException(409,'Wait for Salesforce validation of these exact files before approving.')
 
         for item in plan.items:
 
@@ -900,9 +902,10 @@ def generate_metadata(
         plan=plan_store.get(plan_id)
         try:
             if plan.status=='DRAFT':
+                revision_package(plan_id)
                 package=default_pipeline.prepare_review(package,plan,layout_workflow.require(plan))
                 metadata_spec_store.save_package(package)
-            return default_package_response(plan_id)
+            return validate_generated_draft(plan_id)
         except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
 
     require_legacy_workflow()
@@ -1982,7 +1985,7 @@ def run_default_package(plan_id,dry_run):
     if package is None:raise HTTPException(404,'Generated package not found.')
     if package['targetOrg'] != target_org():raise HTTPException(403,'This package belongs to a different org.')
     plan=plan_store.get(plan_id)
-    if plan.status!='APPROVED' or any(i.approval!='APPROVED' for i in plan.items if i.action!='NO_CHANGE'):
+    if not dry_run and (plan.status!='APPROVED' or any(i.approval!='APPROVED' for i in plan.items if i.action!='NO_CHANGE') or package.get('approvedHash') != package['sourceHash']):
         raise HTTPException(422,'Approve every deployable plan item first.')
     if package['state'] in {'queued','running','pending','unknown','deployed'}:
         raise HTTPException(409,'Inspect the saved operation before retrying.')
@@ -1991,8 +1994,10 @@ def run_default_package(plan_id,dry_run):
     try:
         default_pipeline.verify_package(package)
         default_pipeline.assert_plan(package,plan)
-        if package['layoutSelections']!=layout_workflow.require(plan):raise ValueError('Reviewed layout selections changed.')
+        if not package.get('layoutReady') or package['layoutSelections']!=layout_workflow.require(plan):raise ValueError('Reviewed layout selections changed.')
     except ValueError as exc:raise HTTPException(422,planning_error_detail(exc)) from exc
+    if dry_run and package['state'] == 'validated' and package.get('validatedHash') == package['sourceHash']:
+        return default_package_response(plan_id)
     operation='validate' if dry_run else 'deploy'
     import time
     from Backend.AI.app.services.background_jobs import enabled, enqueue
@@ -2118,6 +2123,29 @@ class SourceEditRequest(BaseModel):
     files:dict[str,str]
 
 
+def validate_generated_draft(plan_id):
+    """Validate the exact saved draft without granting deployment approval."""
+    package = metadata_spec_store.get_package(plan_id)
+    if not package or not package.get('layoutReady'):
+        return default_package_response(plan_id)
+    if package.get('state') in {'queued','running','pending','unknown','deployed'}:
+        return default_package_response(plan_id)
+    try:
+        return run_default_package(plan_id, dry_run=True)
+    except HTTPException:
+        # run_default_package persists submitted-operation failure evidence.
+        # Preflight failures have no job; keep them reviewable for repair.
+        package = metadata_spec_store.get_package(plan_id)
+        if package.get('state') == 'generated':
+            import sys
+            failure = sys.exc_info()[1]
+            detail = failure.detail
+            package.update(state='failed', operation='validate', validatedHash=None,
+                           error=detail.get('message', str(detail)) if isinstance(detail,dict) else str(detail))
+            metadata_spec_store.save_package(package)
+        return default_package_response(plan_id)
+
+
 def build_default_draft(requirement,org,provider,http_request=None,activity_title=None,repair_package=None):
     from time import perf_counter
     draft_started=perf_counter()
@@ -2187,7 +2215,7 @@ def build_default_draft(requirement,org,provider,http_request=None,activity_titl
         with db() as c:c.execute('INSERT OR REPLACE INTO plans VALUES(?,?,?)',(plan.id,owner['id'],org))
         save_chat(owner['id'],org,plan.id,requirement)
         if activity_title:record_activity(owner['id'],org,plan.id,'generated',activity_title,requirement,'generated')
-    response=default_package_response(plan.id)
+    response=validate_generated_draft(plan.id)
     # Include layout/FLS preparation and persistence in user-visible plan latency.
     from Backend.AI.app.services.evaluation_service import record_event
     generation_id=package.get('performance',{}).get('generationId')
@@ -2255,7 +2283,7 @@ def save_component_source(plan_id, package, name, files, expected_hash):
     for item in plan.items:item.approval='PENDING'
     plan_store.save(plan)
     metadata_spec_store.save_package(updated)
-    return default_package_response(plan_id)
+    return validate_generated_draft(plan_id)
 
 
 class ComponentSelectionRequest(BaseModel):
@@ -2305,7 +2333,7 @@ def select_plan_components(plan_id: str, request: ComponentSelectionRequest, htt
         owner = user(http_request)
         with db() as connection:
             connection.execute('INSERT INTO plans VALUES(?,?,?)', (new_id, owner['id'], package['targetOrg']))
-        return default_package_response(new_id)
+        return validate_generated_draft(new_id)
     except ValueError as error:
         raise HTTPException(422, str(error)) from error
 
