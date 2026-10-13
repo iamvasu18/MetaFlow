@@ -52,7 +52,7 @@ def _parse_ai_json(response: str) -> dict:
 
     if cleaned.startswith("```"):
         fenced = re.fullmatch(
-            r"```(?:json)?[ \t]*\r?\n(.*?)\r?\n```",
+            r"```(?:json)?[ \t]*\r?\n(.*?)\s*```",
             cleaned,
             flags=re.DOTALL | re.IGNORECASE,
         )
@@ -670,7 +670,10 @@ class PlanningService:
                 "Return exactly one complete JSON object. "
                 "Do not include Markdown fences, commentary, explanations, "
                 "or another JSON object before or after it. "
-                "Do not use duplicate keys, NaN, or Infinity."
+                "Do not use duplicate keys, NaN, or Infinity. "
+                "For creation requests choose supported ordinary defaults instead of optional questions. "
+                "Preserve explicit component names/types and include important design assumptions in the plan summary. "
+                "Assumptions do not establish org facts or authorize overwrites, permission grants or deployment."
             )
 
             if attempt:

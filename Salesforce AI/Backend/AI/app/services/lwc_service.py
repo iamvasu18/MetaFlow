@@ -13,6 +13,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from Backend.AI.app.salesforce.metadata_service import SalesforceMetadataService
 from Backend.AI.app.services.planning_service import _parse_ai_json
+from Backend.AI.app.salesforce.context_selector import compact_planning_context
 
 TARGETS = {'lightning__AppPage', 'lightning__HomePage', 'lightning__RecordPage', 'lightningCommunity__Page'}
 NS = 'http://soap.sforce.com/2006/04/metadata'
@@ -131,7 +132,7 @@ class LWCAutomationService:
         )
         generation_input = {
             'requirement':request.requirement,'componentName':request.component_name,
-            'apiVersion':version,'targets':request.targets,'verifiedContext':context}
+            'apiVersion':version,'targets':request.targets,'verifiedContext':compact_planning_context(request.requirement, context)}
         # At most two repairs. Every attempt passes the same complete checker.
         for attempt in range(3):
             response = provider.generate(system_prompt=system,user_prompt=json.dumps(generation_input))

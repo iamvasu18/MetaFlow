@@ -348,7 +348,7 @@ export default function Workspace() {
         }
         setApprovedHash('');
         const result = await apiRequest(kind, '/plan', { method: 'POST', token,
-          body: { requirement: answeredRequirement || requirement, target_org: org, generate_files: true, job_key: crypto.randomUUID(), conversation_id: threadId, ...(action === 'fix-generation' ? { repair_error: error, ...(repairTicket ? { repair_ticket: repairTicket } : {}) } : {}) } });
+          body: { requirement: answeredRequirement || requirement, target_org: org, generate_files: true, job_key: crypto.randomUUID(), conversation_id: threadId, ...(action === 'fix-generation' ? (repairTicket ? { repair_error: error, repair_ticket: repairTicket } : {}) : {}) } });
         if (result.backgroundJob) {
           const tracked = { ...result, conversationId: threadId, requirement: answeredRequirement || requirement };
           setGenerationJobs(previous => addJob(previous, tracked));
@@ -582,7 +582,7 @@ export default function Workspace() {
           {information && <section className="ws-status" role="status"><h3>Workspace update</h3><p>{information}</p></section>}
           {clarification && !messages.some(message => message.role === 'assistant' && message.kind === 'clarification' && message.content === clarification.question) && <div className="ws-assistant" aria-live="polite"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{clarification.question}</p></div></div>}
           {generationInThisChat && <div className="ws-assistant" role="status"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{jobProgress?.state === 'reconnecting' ? 'Reconnecting to your saved request…' : 'Thinking…'}</p></div></div>}
-          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && !/oauth|authentication|expired.*token|reconnect|connection|permission|forbidden/i.test(error) && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />Fix with AI</button>}{/oauth|authentication|expired.*token|reconnect|org.*connection/i.test(error) && <Link className="ws-settings-toggle" to="/settings#salesforce">Reconnect Salesforce</Link>}</div>}
+          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && !/oauth|authentication|expired.*token|reconnect|connection|permission|forbidden/i.test(error) && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />{repairTicket ? 'Fix with AI' : 'Retry generation'}</button>}{/oauth|authentication|expired.*token|reconnect|org.*connection/i.test(error) && <Link className="ws-settings-toggle" to="/settings#salesforce">Reconnect Salesforce</Link>}</div>}
         </div>
 
         <footer className="ws-composer-area">

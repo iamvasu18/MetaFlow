@@ -57,9 +57,19 @@ Do not claim an old org observation is a fresh read; use current verifiedOrgFact
 Greetings and general explanations are answer. A question asking whether/how something can
 be done is answer, not build. Explain options without claiming org facts. If a method was not
 specified, recommend an appropriate method, preserving the requested behavior. A direct
-request to implement is build only if its essential requirements are known. For a field,
-ask for the parent object and type if missing; never guess these. Ask concise questions in
-natural language using clarify, keeping the original request in requirement. A reply to a
+request to implement is build when its component and behavior can reasonably be inferred.
+ASSUMPTION-BASED BUILD: Choose supported defaults for ordinary unspecified field names,
+types, business purpose, optional settings and display fields. When asked to use your judgment,
+propose a coherent design, retain the requested component name, and record important assumptions
+in requirement for plan review. Do not ask optional questions before building.
+Ask only when the component cannot be determined, a required detail has no safe default,
+or ambiguity could cause significant unintended changes. Infer a field's parent from relevant
+conversation; if no parent can be established, ask for the parent only and default ordinary types.
+Never assume destructive changes, broad permissions or material relationship targets.
+Defaults are design proposals, not verified org facts. "Yes", "no preference" and "proceed"
+accept the latest clearly established defaults. Never deploy without approval and validation.
+An explicit new component request overrides earlier component types, names and pending requests.
+A reply to a
 pending question may complete its original request. A new independent question/request
 must not inherit names or actions from that pending request. ReferenceContext is for explicit follow-ups only; do not recreate deployed changes. For finding where a field
 exists, use find_field with the exact requested label/API name; never invent results.
@@ -96,6 +106,11 @@ def classify(payload, provider):
                 if raw.get('requested_type') == '':
                     raw['requested_type'] = None
             intent = Intent.model_validate(raw)
+            if payload.get('currentRequestConstraint') and not payload.get('verifiedOrgFacts'):
+                if intent.requested_type != 'CustomObject' or intent.code_kind is not None:
+                    raise ValueError('The current explicit request is CustomObject, not earlier Apex/LWC context.')
+                if not payload.get('verifiedOrgFacts') and intent.action != 'build':
+                    raise ValueError('Generate a CustomObject draft with supported defaults. Optional business purpose and relationships are not blocking questions.')
             if intent.create_new and intent.requested_type is None and intent.action != 'unsupported':
                 raise ValueError('create_new requires requested_type identifying the new component, rather than a referenced dependency.')
             if intent.action in {'answer', 'clarify', 'unsupported'} and not intent.response.strip():
@@ -118,17 +133,20 @@ def respond(turn, provider, api_factory):
     message = turn.message.strip()
     if re.fullmatch(r'(hi|hello|hey|good morning|good afternoon|good evening)[!. ]*', message, re.I):
         return {'action': 'answer', 'response': 'Hi! What would you like to know or build in your Salesforce org?'}
-    # This narrowly matched request lacks its required parent/type. Ask immediately,
-    # rather than paying for a model call that cannot discover an unspecified parent.
-    if not turn.pending_question and not turn.reference_context:
-        incomplete = re.fullmatch(r"(?:please\s+)?create\s+(?:a\s+|an\s+)?field\s+(?:(?:named|called)\s+)?([A-Za-z][A-Za-z0-9_ ]{0,79})[.!]?", message, re.I)
-        if incomplete and not re.search(r"\b(on|in|for|with|type|object)\b", incomplete.group(1), re.I):
-            label = incomplete.group(1).strip()
-            return {'action': 'clarify', 'response': f'Which object should I add the “{label}” field to, and what field type should it use?', 'requirement': message}
     payload = {'message': message, 'pendingRequirement': turn.pending_requirement,
                'pendingQuestion': turn.pending_question, 'referenceContext': turn.reference_context,
                'recentMessages': [message.model_dump() for message in turn.recent_messages]}
+    new_object = re.match(r"^(?:please\s+)?(?:create|build|add)\s+(?:a\s+|an\s+)?(?:custom\s+)?object\s+(?:(?:named|called)\s+)?([A-Za-z][A-Za-z0-9_]*)\b", message, re.I)
+    if new_object:
+        payload.update(pendingRequirement='', pendingQuestion='', referenceContext='', recentMessages=[])
+        payload['currentRequestConstraint'] = 'This is a new CustomObject request. Do not ask about LWC or Apex. Use defaults and preserve the object name.'
     intent = classify(payload, provider)
+    if new_object:
+        intent.requested_type = 'CustomObject'
+        intent.code_kind = None
+        intent.components = []
+        intent.objects = [new_object.group(1)]
+        intent.create_new = True
     if intent.code_kind is None and intent.requested_type in {'ApexClass', 'LightningComponentBundle'}:
         intent.code_kind = intent.requested_type
     if intent.action == 'unsupported':

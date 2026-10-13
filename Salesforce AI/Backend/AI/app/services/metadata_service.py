@@ -405,10 +405,8 @@ class PlanningProvider:
             "permissionSetCapabilities": self.context.get("permissionSetCapabilities"),
             "focusedObjectRequest": self.context.get("focusedObjectRequest"),
             "discoveryScope": self.context.get("discoveryScope"),
-            "existingComponents": self.context.get(
-                "existingComponents",
-                {},
-            ),
+            "existingComponents": {},
+            "inventoryPolicy": "Whole-org inventories are omitted from prompts. Generated identities are checked against the full live inventory by the backend; omission never proves absence.",
             "validationRuleDiscovery": self.context.get(
                 "validationRuleDiscovery",
                 {},

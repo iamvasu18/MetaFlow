@@ -120,12 +120,13 @@ def test_existing_object_create_cannot_become_duplicate_build():
     assert result['action']=='clarify'
     assert 'Account' in result['response']
 
-def test_short_incomplete_field_request_asks_immediately_without_model():
-    p=Provider({})
-    result=respond(turn('create a field check'),p,lambda:pytest.fail('Unspecified object must not be guessed'))
+def test_short_field_request_uses_context_aware_classifier():
+    p=Provider(dict(action='clarify', response='Which object should contain Check?', requirement='Create a field Check'))
+    result=respond(turn('create a field check'),p,lambda:pytest.fail('Unspecified parent'))
     assert result['action']=='clarify'
-    assert 'check' in result['response'] and 'object' in result['response'] and 'type' in result['response']
-    assert not p.calls
+    assert len(p.calls)==1
+    assert 'ASSUMPTION-BASED BUILD' in p.calls[0]['system_prompt']
+
 
 def test_null_optional_facts_are_unknown_not_format_failure():
     p=Provider(dict(action='answer',response='Please describe what you need.',requirement=None,field=None,objects=None,components=None,requested_type=None))

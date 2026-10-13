@@ -1,4 +1,5 @@
 import re
+import json
 from itertools import chain
 
 
@@ -157,7 +158,7 @@ def compact_planning_context(requirement: str, metadata: dict) -> dict:
         r"|\bcall\b.*\bflow\b", requirement, re.I,
     )
     result = {k: v for k, v in metadata.items()
-              if k != "objects" and (k != "flowDependencies" or action_request)}
+              if k in {"orgTimeZone", "validationRuleDiscovery", "focusedObjectRequest", "discoveryScope", "permissionSetCapabilities", "flowDependencies"} and (k != "flowDependencies" or action_request)}
     result["objects"] = []
     for obj in metadata.get("objects", []):
         fields = obj.get("fields", [])
@@ -194,15 +195,17 @@ def compact_planning_context(requirement: str, metadata: dict) -> dict:
                 if summary != field:
                     summary["detailsOmitted"] = True
                 projected.append(summary)
-        compact = {k: v for k, v in obj.items() if k not in {"fields", "relationships"}}
+        compact = {k: v for k, v in obj.items() if k in {"name", "label", "labelPlural", "createable", "updateable", "deletable", "queryable", "validationRules", "recordTypes"}}
         compact["fields"] = projected
         # Relationship identity remains on each field; retain unusual standalone entries.
         if obj.get("relationships"):
-            compact["relationships"] = obj["relationships"]
+            compact["relationships"] = [{k: r[k] for k in ("name", "relationshipName", "childSObject", "field") if k in r} for r in obj["relationships"] if isinstance(r, dict)]
         result["objects"].append(compact)
     result["contextPolicy"] = (
         "Every selected object's field name/type inventory is included. Fields marked "
         "detailsOmitted have abbreviated metadata, not empty picklists or absent formulas. "
         "Do not invent omitted values or formulas. Report missing configuration if needed."
     )
+    if len(json.dumps(result, ensure_ascii=True, separators=(',', ':'))) > 240000:
+        raise ValueError('Relevant Salesforce context is still too large for one draft. No generation request was sent. Narrow the requested objects or split the implementation; full metadata remains available for validation.')
     return result

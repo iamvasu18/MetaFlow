@@ -70,7 +70,7 @@ class AnthropicProvider(AIProvider):
         messages = [{"role": "user", "content": user_prompt}]
         # Count the actual assembled request, not a characters/4 estimate.
         count = self.client.messages.count_tokens(
-            model=self.model, system=system_prompt, messages=messages,
+            model=self.model, system=system_prompt + "\nReturn the exact requested JSON only. Do not wrap JSON in Markdown code fences.", messages=messages,
         ).input_tokens
         logging.getLogger(__name__).info(
             "AI input_tokens=%d configured_input_budget=%d output_limit=%d",
@@ -87,7 +87,7 @@ class AnthropicProvider(AIProvider):
         response = self.client.messages.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            system=system_prompt,
+            system=system_prompt + "\nReturn the exact requested JSON only. Do not wrap JSON in Markdown code fences.",
             messages=[
                 {
                     "role": "user",
