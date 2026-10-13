@@ -91,7 +91,7 @@ try {
  const ast = parse(input.javascript, {sourceType:'module', plugins:['decorators-legacy','classProperties']});
  checkFormLifecycle(ast);
  const imports = new Map();
- const modules = new Set(['lwc','lightning/uiRecordApi','lightning/uiObjectInfoApi','lightning/navigation','lightning/platformShowToastEvent','lightning/toast']);
+ const modules = new Set(['lwc','lightning/uiRecordApi','lightning/uiObjectInfoApi','lightning/uiRelatedListApi','lightning/navigation','lightning/platformShowToastEvent','lightning/toast']);
  const banned = new Set(['eval','Function','fetch','XMLHttpRequest','WebSocket','Worker','localStorage','sessionStorage','document','window','globalThis','navigator']);
  const blockedMembers = new Set(['innerHTML','outerHTML','insertAdjacentHTML','write','__proto__','constructor','prototype']);
  traverse(ast, {

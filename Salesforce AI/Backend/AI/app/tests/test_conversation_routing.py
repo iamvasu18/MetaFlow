@@ -124,8 +124,8 @@ def test_short_field_request_uses_context_aware_classifier():
     p=Provider(dict(action='clarify', response='Which object should contain Check?', requirement='Create a field Check'))
     result=respond(turn('create a field check'),p,lambda:pytest.fail('Unspecified parent'))
     assert result['action']=='clarify'
-    assert len(p.calls)==1
-    assert 'ASSUMPTION-BASED BUILD' in p.calls[0]['system_prompt']
+    assert not p.calls
+    assert result['response']=='Which object should I add check to?'
 
 
 def test_null_optional_facts_are_unknown_not_format_failure():

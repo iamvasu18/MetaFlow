@@ -79,6 +79,8 @@ jobs:
           Backend/AI/app/tests/test_repair_reliability.py
           Backend/AI/app/tests/test_assumption_planning.py
           Backend/AI/app/tests/test_validation_before_approval.py
+          Backend/AI/app/tests/test_home_search_routing.py
+          Backend/AI/app/tests/test_short_clarification.py
           Backend/AI/app/tests/test_hosting.py
           Backend/AI/app/tests/test_oauth_connection.py
           Backend/AI/app/tests/test_multi_provider.py

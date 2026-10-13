@@ -1,5 +1,6 @@
 import json
 import re
+from Backend.AI.app.services.implementation_routing import resolve_ui_requirement, check_ui_plan, ImplementationChoiceError
 from Backend.AI.app.services.discovery_service import check_planned_components, ComponentConflict
 
 from Backend.AI.app.prompts.prompt_builder import (
@@ -589,6 +590,7 @@ class PlanningService:
     ) -> ImplementationPlan:
 
         # ---------------------------------------------
+        requirement = resolve_ui_requirement(requirement)
         # 1. Get Salesforce context
         # ---------------------------------------------
 
@@ -764,6 +766,7 @@ class PlanningService:
                 continue
 
             try:
+                check_ui_plan(requirement, plan_data)
                 plan = self._validate_generated_plan(
                     plan_data,
                     requirement,
@@ -801,6 +804,9 @@ class PlanningService:
             except ComponentConflict:
                 raise
             except ValueError as error:
+                if isinstance(error, ImplementationChoiceError) and attempt == 0:
+                    retry_feedback = str(error)
+                    continue
                 if attempt == 1:
                     logger.warning(
                         "Flow plan correction failed on attempt 2/2; no plan was saved."

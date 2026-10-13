@@ -305,7 +305,7 @@ def finish(row, state, result):
                         else "no_change"
                     )
                 else:
-                    content = str(detail or "Background generation failed.")
+                    content = str((detail.get("message") or "Background generation failed.") if isinstance(detail, dict) else (detail or "Background generation failed."))
                     kind = "error"
 
                 connection.execute(
