@@ -106,11 +106,6 @@ def classify(payload, provider):
                 if raw.get('requested_type') == '':
                     raw['requested_type'] = None
             intent = Intent.model_validate(raw)
-            if payload.get('currentRequestConstraint') and not payload.get('verifiedOrgFacts'):
-                if intent.requested_type != 'CustomObject' or intent.code_kind is not None:
-                    raise ValueError('The current explicit request is CustomObject, not earlier Apex/LWC context.')
-                if not payload.get('verifiedOrgFacts') and intent.action != 'build':
-                    raise ValueError('Generate a CustomObject draft with supported defaults. Optional business purpose and relationships are not blocking questions.')
             if intent.create_new and intent.requested_type is None and intent.action != 'unsupported':
                 raise ValueError('create_new requires requested_type identifying the new component, rather than a referenced dependency.')
             if intent.action in {'answer', 'clarify', 'unsupported'} and not intent.response.strip():
@@ -129,6 +124,43 @@ def classify(payload, provider):
     return intent
 
 
+def apply_optional_defaults(intent, message, pending_requirement='', facts=None):
+    """Optional design questions cannot block an explicit supported build."""
+    explicit = re.match(r'^(?:please\s+)?(?:create|build|add|implement)\b', message, re.I)
+    followup = pending_requirement and re.fullmatch(r"(?:just\s+)?(?:create(?:\s+(?:it|them|object))?|proceed|yes|no preference|(?:i\s+)?don.t have (?:any\s+)?(?:a\s+)?preference)[.! ]*", message, re.I)
+    if not (explicit or followup) or intent.action != 'clarify':
+        return intent
+    if facts and any(facts.get(k) for k in ('existingRequestedFields','existingRequestedComponents','existingRequestedObjects')):
+        return intent
+    if re.search(r'which object|what condition|which condition|which user|what access|what permission|recipient|overwrite|delet(?:e|ion)|schedule|(?:what|which).*method', intent.response, re.I):
+        return intent
+    ordinary = r'business purpose|primary purpose|purpose and scope|search scope|fields.*(?:search results|details section|display)|(?:what|which).*field type|error message'
+    if not re.search(ordinary,intent.response,re.I):
+        return intent
+    allowed = intent.requested_type in {'CustomObject','LightningComponentBundle','ApexClass','ValidationRule'}
+    if intent.requested_type == 'CustomField':
+        allowed = bool(intent.objects and intent.field)
+    if allowed:
+        intent.action = 'build'
+        intent.response = ''
+        intent.requirement = (intent.requirement or pending_requirement or message) + '\nUse supported defaults for ordinary optional design settings. Preserve explicit component names and requested behavior; record important assumptions in the plan.'
+    return intent
+
+
+def basic_object_request(message):
+    """Recognize only unambiguous object-only requests, without inventing scope."""
+    prefix = r'(?:please\s+)?(?:create|build|add)\s+(?:a\s+|an\s+)?'
+    identity = r'([A-Za-z][A-Za-z0-9_]*(?:\s+[A-Za-z][A-Za-z0-9_]*){0,3}?)'
+    for pattern in (prefix + r'(?:custom\s+)?object\s+(?:(?:named|called)\s+)?' + identity,
+                    prefix + identity + r'\s+(?:custom\s+)?object'):
+        match = re.fullmatch(pattern + r'[.! ]*', message.strip(), re.I)
+        if match:
+            name = match.group(1).strip()
+            if not re.search(r'\b(with|and|on|for|some|fields|relationships|named|called)\b', name, re.I):
+                return name
+    return None
+
+
 def respond(turn, provider, api_factory):
     message = turn.message.strip()
     if re.fullmatch(r'(hi|hello|hey|good morning|good afternoon|good evening)[!. ]*', message, re.I):
@@ -136,17 +168,25 @@ def respond(turn, provider, api_factory):
     payload = {'message': message, 'pendingRequirement': turn.pending_requirement,
                'pendingQuestion': turn.pending_question, 'referenceContext': turn.reference_context,
                'recentMessages': [message.model_dump() for message in turn.recent_messages]}
-    new_object = re.match(r"^(?:please\s+)?(?:create|build|add)\s+(?:a\s+|an\s+)?(?:custom\s+)?object\s+(?:(?:named|called)\s+)?([A-Za-z][A-Za-z0-9_]*)\b", message, re.I)
-    if new_object:
-        payload.update(pendingRequirement='', pendingQuestion='', referenceContext='', recentMessages=[])
-        payload['currentRequestConstraint'] = 'This is a new CustomObject request. Do not ask about LWC or Apex. Use defaults and preserve the object name.'
-    intent = classify(payload, provider)
-    if new_object:
-        intent.requested_type = 'CustomObject'
-        intent.code_kind = None
-        intent.components = []
-        intent.objects = [new_object.group(1)]
-        intent.create_new = True
+    # Exact basic-object requests need no model questionnaire. Both word orders
+    # are supported; more complex requests still use the intent classifier.
+    basic = basic_object_request(message)
+    if not basic and re.fullmatch(r'(?:just\s+)?(?:create(?:\s+(?:it|them|object))?|proceed|yes)[.! ]*', message, re.I):
+        basic = basic_object_request(turn.pending_requirement)
+    if basic:
+        api = api_factory()
+        if api is None:
+            return {'action':'answer','response':'Connect Salesforce so I can verify the object before planning.'}
+        from fastapi import HTTPException
+        try:
+            facts = read_facts(api, Intent(action='build', requirement=message, objects=[basic], create_new=True, requested_type='CustomObject'))
+        except HTTPException:
+            return {'action':'answer','response':'I could not verify the object catalog. Please check the connection and metadata access; absence is not established.'}
+        conflicts = facts['existingRequestedObjects']
+        if conflicts:
+            return {'action':'clarify','response':f"{', '.join(conflicts)} already exists in the connected org. Reuse it unchanged, or give a distinct name for a new object?",'requirement':message}
+        return {'action':'build','response':'','requirement':f'Create a standalone custom object named {basic}. Use the standard Name field and supported object defaults. Assumptions: no additional custom fields or relationships were requested. Record these assumptions in the plan.', 'requested_type':'CustomObject','create_new':True,'objects':[basic],'components':[]}
+    intent = apply_optional_defaults(classify(payload, provider), message, turn.pending_requirement)
     if intent.code_kind is None and intent.requested_type in {'ApexClass', 'LightningComponentBundle'}:
         intent.code_kind = intent.requested_type
     if intent.action == 'unsupported':
@@ -202,7 +242,7 @@ def respond(turn, provider, api_factory):
         'Ask at most two essential questions. State reasonable optional defaults instead of a questionnaire. '
         'Unavailable/failed reads are unknown, never absent. Do not invent fields or profile names.'
     )
-    grounded = classify(payload, provider)
+    grounded = apply_optional_defaults(classify(payload, provider), message, turn.pending_requirement, facts)
     # Existing identity conflicts cannot turn into a new-create draft in this turn.
     if intent.create_new and (facts['existingRequestedFields'] or facts['existingRequestedComponents'] or facts['existingRequestedObjects']):
         grounded.action = 'clarify'

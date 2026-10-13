@@ -1174,6 +1174,8 @@ class DefaultMetadataPipeline(ApexAutomationService):
         updated["layoutReady"] = True
         updated["sourceHash"] = self.fingerprint(updated)
         updated.pop("approvedHash", None)
+        updated.update(state="generated", validatedHash=None, jobId=None,
+                       operation=None, lastResult=None, error=None)
 
         return updated
 
@@ -1182,8 +1184,8 @@ class DefaultMetadataPipeline(ApexAutomationService):
 
         if (
             not bundle.get("layoutReady")
-            or bundle.get("approvedHash")
-            != bundle["sourceHash"]
+            or (not dry_run and bundle.get("approvedHash")
+            != bundle["sourceHash"])
         ):
             raise ValueError(
                 "Review layouts and approve the exact "
