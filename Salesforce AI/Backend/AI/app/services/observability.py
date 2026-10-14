@@ -19,6 +19,10 @@ _IDENTIFIER = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 # Only these explicitly supplied attributes enter structured logs.
 _FIELDS = {
     "operation",
+    "phase",
+    "ai_calls",
+    "input_tokens",
+    "output_tokens",
     "state",
     "status_code",
     "duration_ms",
@@ -63,6 +67,9 @@ class JsonFormatter(logging.Formatter):
                 "duration_ms",
                 "queue_ms",
                 "status_code",
+                "ai_calls",
+                "input_tokens",
+                "output_tokens",
             }:
                 if isinstance(value, (int, float)):
                     entry[name] = value
@@ -204,3 +211,19 @@ class RequestLoggingMiddleware:
                     )
             finally:
                 request_id_context.reset(token)
+
+def timed_ai_call(method):
+    from functools import wraps
+    from time import perf_counter
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        started = perf_counter()
+        state = 'failed'
+        log_event(logging.getLogger('metaflow.ai'), 'ai_call_started', operation='generate', phase='ai_request', state='running')
+        try:
+            result = method(self, *args, **kwargs)
+            state = 'succeeded'
+            return result
+        finally:
+            log_event(logging.getLogger('metaflow.ai'), 'ai_call_finished', operation='generate', phase='ai_request', state=state, duration_ms=round((perf_counter()-started)*1000,3))
+    return wrapped

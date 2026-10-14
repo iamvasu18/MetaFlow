@@ -27,6 +27,22 @@ class ObjectAccess(Strict):
     viewAllRecords: StrictBool = False
     modifyAllRecords: StrictBool = False
 
+    @model_validator(mode='before')
+    @classmethod
+    def normalize_edit_alias(cls, value):
+        """Accept the model's known alias without relaxing permission typing.
+
+        A conflicting pair is rejected so an AI cannot silently change a grant.
+        """
+        if not isinstance(value, dict) or 'allowUpdate' not in value:
+            return value
+        normalized = dict(value)
+        update = normalized.pop('allowUpdate')
+        if 'allowEdit' in normalized and normalized['allowEdit'] != update:
+            raise ValueError('Conflicting allowUpdate and allowEdit grants.')
+        normalized['allowEdit'] = update
+        return normalized
+
     @model_validator(mode='after')
     def dependencies(self):
         if any((self.allowCreate,self.allowEdit,self.allowDelete,self.viewAllRecords,self.modifyAllRecords)) and not self.allowRead:

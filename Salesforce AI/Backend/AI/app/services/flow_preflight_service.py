@@ -23,7 +23,8 @@ class FlowPreflightService:
         executable=shutil.which('sf')
         if not executable: raise RuntimeError("Salesforce CLI 'sf' was not found in PATH.")
         try:
-            result=subprocess.run([executable,*args,'--target-org',self.target_org,'--json'],capture_output=True,text=True,encoding='utf-8',errors='replace',check=False,timeout=120)
+            from Backend.AI.app.services.sf_process import sf_arguments
+            result=subprocess.run(sf_arguments([executable,*args,'--target-org',self.target_org,'--json']),capture_output=True,text=True,encoding='utf-8',errors='replace',check=False,timeout=120)
         except (OSError,subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f'Flow preflight command could not complete: {exc}') from exc
         try: data=json.loads(result.stdout)
@@ -83,7 +84,8 @@ class FlowPreflightService:
         if not executable:raise RuntimeError("Salesforce CLI 'sf' was not found in PATH.")
         command[0]=executable
         try:
-            result=subprocess.run(command,cwd=str(project_root),capture_output=True,text=True,encoding='utf-8',errors='replace',check=False,timeout=1900)
+            from Backend.AI.app.services.sf_process import sf_arguments
+            result=subprocess.run(sf_arguments(command),cwd=str(project_root),capture_output=True,text=True,encoding='utf-8',errors='replace',check=False,timeout=1900)
         except (OSError,subprocess.TimeoutExpired) as exc:
             raise RuntimeError('Salesforce Flow validation did not complete; no deployment was started.') from exc
         try:data=json.loads(result.stdout)

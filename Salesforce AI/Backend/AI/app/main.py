@@ -7,6 +7,7 @@ import logging
 import time
 from Backend.AI.app.services.observability import (
     configure_logging,
+    log_event,
     RequestLoggingMiddleware,
 )
 from Backend.AI.app.services.profile_fls_service import (
@@ -238,16 +239,8 @@ def run_salesforce_cli_json(
         *command[1:],
     ]
 
-    # Execute sf.CMD directly.
-    #
-    # This is the Windows-safe approach verified against
-    # the current Salesforce CLI installation, including
-    # paths such as:
-    #
-    #   C:\\\\\Program Files\\\\\sf\\\\\bin\\\\\sf.CMD
-    #
-    # subprocess handles the executable path and arguments
-    # correctly without an additional cmd.exe quoting layer.
+    from Backend.AI.app.services.sf_process import sf_arguments
+    normalized_command = sf_arguments(normalized_command)
     result = subprocess.run(
         normalized_command,
         capture_output=True,
@@ -255,6 +248,7 @@ def run_salesforce_cli_json(
         encoding="utf-8",
         errors="replace",
         check=False,
+        timeout=180,
     )
 
     stdout = (
@@ -1934,6 +1928,8 @@ def default_package_response(plan_id):
 def save_default_result(plan_id,package,payload,operation):
     details=payload.get('result',{})
     if not isinstance(details,dict):raise RuntimeError('Invalid Salesforce deployment response.')
+    if package.get('jobId') and details.get('id') != package['jobId']:
+        raise ValueError('Salesforce report job identity does not match this saved operation. No result was applied.')
     pending=details.get('done') is False or details.get('status') in {'Pending','Queued','InProgress','Canceling'}
     if pending:state='pending'
     elif details.get('done') is True and details.get('success') is True:
@@ -1974,7 +1970,7 @@ def save_default_result(plan_id,package,payload,operation):
         import time
         elapsed=time.time()-package['operationStartedAt']
         package['operationSeconds']=round(elapsed,3)
-        logging.getLogger(__name__).warning('Salesforce operation=%s state=%s total_seconds=%.3f job=%s',operation,state,elapsed,details.get('id'))
+        log_event(logging.getLogger(__name__), 'salesforce_operation_finished', operation=operation, state=state, phase='completion', duration_ms=round(elapsed*1000,3), plan_id=plan_id, salesforce_job_id=details.get('id'))
     metadata_spec_store.save_package(package)
     return default_package_response(plan_id)
 
@@ -2004,7 +2000,7 @@ def run_default_package(plan_id,dry_run):
     if enabled():
         enqueue(operation,{'plan_id':plan_id,'source_hash':package['sourceHash']},package=package)
         return default_package_response(plan_id)
-    package.update(state='running',operation=operation,error=None,errorDetails=None,nextAction=None,jobId=None,operationStartedAt=time.time())
+    package.update(state='running',operation=operation,error=None,errorDetails=None,nextAction=None,jobId=None,lastResult=None,operationSeconds=None,operationStartedAt=time.time())
     if dry_run:
         package['validatedHash']=None
     metadata_spec_store.save_package(package)
@@ -2258,7 +2254,11 @@ from Backend.AI.app.services.evaluation_service import plan_measurement
 def repair_default_plan(plan_id:str,request:RepairRequest,http_request:Request):
     from Backend.AI.app.services.plan_revision_service import RepairProvider,repair_context
     package=revision_package(plan_id)
-    if request.component_name and request.source_hash is not None:
+    if request.source_hash is not None and request.source_hash != package['sourceHash']:
+        raise HTTPException(409,'Source changed. Reload before repairing.')
+    selected = next((c for c in package.get('components',[]) if c.get('fullName') == request.component_name), None)
+    flow_config_repair = selected is not None and selected.get('metadataType') == 'Flow'
+    if request.component_name and request.source_hash is not None and not flow_config_repair:
         from Backend.AI.app.services.component_source_service import repair_sources
         if request.source_hash != package['sourceHash']:
             raise HTTPException(409,'Source changed. Reload before repairing.')
@@ -2469,8 +2469,10 @@ def saved_package_status(plan_id:str):
         with db() as connection:
             job=connection.execute('SELECT state,result FROM background_jobs WHERE id=? AND user_id=? AND org_id=?', (package['backgroundJobId'],current_account.get(),current_org.get())).fetchone()
         if job and job['state'] in {'failed','unknown'}:
-            package.update(state=job['state'],error=json.loads(job['result'] or '{}').get('detail'),nextAction='Inspect the saved operation before retrying.')
-    return {key:package.get(key) for key in ('state','jobId','operation','sourceHash','validatedHash','error','nextAction')}
+            detail=json.loads(job['result'] or '{}').get('detail')
+            message=detail.get('message') or detail.get('question') or 'Background operation failed.' if isinstance(detail,dict) else str(detail or 'Background operation failed.')
+            package.update(state=job['state'],error=message,nextAction='Inspect the saved operation before retrying.')
+    return {key:package.get(key) for key in ('state','jobId','operation','sourceHash','validatedHash','approvedHash','error','nextAction','lastResult','errorDetails','operationSeconds','localChecks')}
 
 
 @app.get('/api/evaluation/summary')

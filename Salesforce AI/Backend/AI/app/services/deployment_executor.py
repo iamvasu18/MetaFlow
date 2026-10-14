@@ -420,17 +420,26 @@ class SalesforceDeploymentExecutor:
 
         try:
 
+            from Backend.AI.app.services.sf_process import sf_arguments
             result = subprocess.run(
-                command,
+                sf_arguments(command),
                 cwd=str(self.project_root),
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                timeout=180,
             )
 
-        except OSError as exc:
+        except subprocess.TimeoutExpired:
+            return {'success':False,'planId':plan.id,'status':plan.status,
+                    'targetOrg':self.target_org,'operationStatus':'unknown',
+                    'reconciliationRequired':True,'returnCode':None,
+                    'nextAction':'Do not resubmit. Check Salesforce deployment history and report the original job before retrying.',
+                    'error':'Deployment submission timed out; Salesforce may still be processing it.'}
+
+        except (OSError, RuntimeError) as exc:
 
             return {
                 "success": False,

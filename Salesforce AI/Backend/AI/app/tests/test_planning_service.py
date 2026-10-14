@@ -1,3 +1,4 @@
+from Backend.AI.app.tests.test_workspace_regression import client
 from Backend.AI.app.providers.mock_provider import (
     MockProvider,
 )
@@ -334,14 +335,14 @@ def test_error_reports_failure_location_without_response_content():
     assert 'sensitive' not in str(exc.value)
 
 
-def test_format_failure_endpoint_never_saves_a_plan(monkeypatch):
+def test_format_failure_endpoint_never_saves_a_plan(monkeypatch, client):
     import Backend.AI.app.main as main
     from fastapi.testclient import TestClient
     provider=Mock();provider.generate.return_value=valid_json_response()+' trailing'
     monkeypatch.setattr(main, 'get_ai_provider', lambda:provider)
     saved=Mock();monkeypatch.setattr(main.plan_store, 'save', saved)
-    response=TestClient(main.app).post('/api/plan',json={
-        'requirement':'Review Contact', 'salesforce_context':{'objects':[]}})
+    monkeypatch.setattr(main.default_pipeline, 'generate', lambda request, value: PlanningService(value).generate_plan(request.requirement, {'objects':[]}))
+    response=client.post('/api/plan',json={'target_org':'app_ours','generate_files':True,'requirement':'Review Contact'})
     assert response.status_code == 502
     assert 'after 2 formatting attempts' in response.json()['detail']
     saved.assert_not_called()
@@ -530,17 +531,17 @@ def test_loop_and_scheduled_path_connector_diagnostics():
     assert {i['path'] for i in issues} == {'elements[0].nextValue','scheduledPaths[0].next'}
 
 
-def test_repeated_graph_error_is_reported_and_never_saved(monkeypatch):
+def test_repeated_graph_error_is_reported_and_never_saved(monkeypatch, client):
     import Backend.AI.app.main as main
     from fastapi.testclient import TestClient
     _,bad,context=broken_scheduled_graph('rule')
     provider=Mock();provider.generate.return_value=json.dumps(bad)
     monkeypatch.setattr(main,'get_ai_provider',lambda:provider)
     saved=Mock();monkeypatch.setattr(main.plan_store,'save',saved)
-    response=TestClient(main.app).post('/api/plan',json={
-        'requirement':'Create Scheduled Flow on Field List','salesforce_context':context})
+    monkeypatch.setattr(main.default_pipeline, 'generate', lambda request, value: PlanningService(value).generate_plan(request.requirement, context))
+    response=client.post('/api/plan',json={'target_org':'app_ours','generate_files':True,'requirement':'Create Scheduled Flow on Field List'})
     assert response.status_code == 422
-    detail=response.json()['detail']
+    detail=str(response.json()['detail'])
     assert 'elements[0].rules[0].next' in detail and 'Missing_Update' in detail
     saved.assert_not_called()
     assert provider.generate.call_count == 2

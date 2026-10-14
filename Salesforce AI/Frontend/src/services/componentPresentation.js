@@ -14,6 +14,7 @@ function matches(failure, component) {
   const name = component.fullName;
   const [object, member] = name.split('.');
   if (failure.fullName === name || failure.fullName === `markup://c:${name}`) return true;
+  if (failure.fullName && failure.fullName !== object) return false;
   if (component.metadataType === 'ApexClass') return path.endsWith(`classes/${name}.cls`) || path.endsWith(`classes/${name}.cls-meta.xml`);
   if (component.metadataType === 'ApexTrigger') return path.endsWith(`triggers/${name}.trigger`);
   if (component.metadataType === 'LightningComponentBundle') return path.includes(`lwc/${name}/`) || path.endsWith(`lwc/${name}`);
@@ -21,7 +22,8 @@ function matches(failure, component) {
   if (component.metadataType === 'Flow') return path.endsWith(`flows/${name}.flow`) || path.endsWith(`flows/${name}.flow-meta.xml`);
   if (component.metadataType === 'CustomObject') return path.endsWith(`objects/${name}.object`) || path.endsWith(`objects/${name}/${name}.object-meta.xml`);
   if (['CustomField', 'ValidationRule'].includes(component.metadataType)) {
-    return path.endsWith(`objects/${object}.object`) || (path.includes(`objects/${object}/`) && path.includes(`/${member}.`));
+    if (failure.fullName && failure.fullName !== object && failure.fullName !== name) return false;
+    return (path.includes(`objects/${object}/`) && path.includes(`/${member}.`));
   }
   return false;
 }
@@ -29,6 +31,7 @@ function matches(failure, component) {
 export function componentErrors(bundle, component) {
   const item = bundle?.plan?.items?.find(item => item.metadataType === component.metadataType && item.fullName === component.fullName);
   const errors = list(item?.validation?.errors).map(error => plain(typeof error === 'string' ? error : error.message));
+  errors.push(...list(bundle?.localChecks?.errors).filter(error => error.fullName === component.fullName).map(error => plain(error.message)));
   const details = salesforceDetails(bundle);
   for (const failure of list(details.componentFailures)) {
     if (!matches(failure, component)) continue;
@@ -51,9 +54,9 @@ export function componentErrors(bundle, component) {
 export function packageErrors(bundle) {
   const details = salesforceDetails(bundle);
   const components = bundle?.components || [];
-  return list(details.componentFailures)
+  return [...new Set(list(details.componentFailures)
     .filter(failure => !components.some(component => matches(failure, component)))
-    .map(failure => `${failure.fullName || failure.fileName || 'Package'}: ${plain(failure.problem || failure.message)}`);
+    .map(failure => `${failure.fullName || failure.fileName || 'Package'}: ${plain(failure.problem || failure.message)}`))];
 }
 
 export function relatedCoverageNotes(bundle, component) {

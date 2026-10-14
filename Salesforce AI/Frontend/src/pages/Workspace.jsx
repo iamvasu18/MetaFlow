@@ -1,3 +1,4 @@
+import { repairRequest, repairTarget } from '../services/repairRouting.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Bot, Cloud, Code2, FileText, MessageSquare, Plus, Send, Settings2, Sun, Moon, ShieldCheck, Upload, Pencil, Wrench, Menu, X, Ticket, Sparkles } from 'lucide-react';
@@ -6,7 +7,7 @@ import { useTheme } from '../context/ThemeContext';
 import { useOrg } from '../context/OrgContext';
 import { apiRequest } from '../services/workspaceApi';
 import { waitForBackgroundJob } from '../services/backgroundJobs';
-import { validTickets, jobForChat, addJob, removeJob, isOriginVisible } from '../services/chatJobs';
+import { validTickets, jobForChat, addJob, removeJob, isOriginVisible, sameOperation } from '../services/chatJobs';
 import { componentErrors, packageErrors, relatedCoverageNotes } from '../services/componentPresentation';
 import { permissionGrantSummary } from '../services/permissionPresentation';
 import { canDeploy, statusText, statusLabel, conversationRequirement } from '../services/workspaceState';
@@ -29,6 +30,8 @@ export default function Workspace() {
   const [requirement, setRequirement] = useState(() => location.state?.requirement || '');
   const token = '';
   const [bundle, setBundle] = useState(null);
+  const visibleBundle = useRef(bundle);
+  visibleBundle.current = bundle;
   const [generationJobs, setGenerationJobs] = useState(() => {
     try { return validTickets(JSON.parse(localStorage.getItem(GENERATION_JOB_KEY))); } catch { return []; }
   });
@@ -95,9 +98,10 @@ export default function Workspace() {
       throw new Error('Backend returned an incomplete package.');
     }
     setInformation('');
+    setError('');
     setPermissionAssignment(null);
     setArchivedPlan(null);
-    setSourceEditor(null);
+    setSourceEditor(previous => previous && previous.hash === value.sourceHash && visibleBundle.current?.id === value.id ? previous : null);
     setConfirmDeploy(false);
     setClarification(null); setRepairTicket('');
     setBundle(value);
@@ -120,27 +124,44 @@ export default function Workspace() {
     return () => { alive = false; };
   }, [org]);
   useEffect(() => {
-    if (!['queued', 'running', 'pending'].includes(bundle?.state) || !sameOrg) return;
+    if (!['queued', 'running', 'pending', 'failed'].includes(bundle?.state) || !sameOrg || (bundle?.state === 'failed' && (!bundle.jobId || bundle.lastResult?.result?.details))) return;
     let alive = true;
     let timer;
     const id = bundle.id;
+    const originChat = conversationId;
+    const originOrg = org;
+    const origin = { chat: originChat, org: originOrg, id, sourceHash: bundle.sourceHash, jobId: bundle.jobId };
+    const current = () => alive && sameOperation(origin, { chat: visibleConversation.current, org: visibleOrg.current, id: visibleBundle.current?.id, sourceHash: visibleBundle.current?.sourceHash, jobId: visibleBundle.current?.jobId });
     async function poll() {
-      if (!alive) return;
+      if (!current()) return;
       if (operationLock.current) { timer = setTimeout(poll, 2000); return; }
       try {
+        if (bundle.state === 'failed' && bundle.jobId) {
+          const refreshed = await apiRequest('default', `/plans/${encodeURIComponent(id)}/report`, { method: 'POST' });
+          if (current()) acceptBundle(refreshed);
+          return;
+        }
         const status = await apiRequest('default', `/plans/${encodeURIComponent(id)}/status`);
-        if (alive) {
+        if (status.sourceHash !== origin.sourceHash) {
+          const latest = await apiRequest('default', `/plans/${encodeURIComponent(id)}`);
+          if (current() && latest.id === id && latest.targetOrg === originOrg) {
+            acceptBundle(latest);
+            setInformation('Saved source changed. Review the latest files before approval.');
+          }
+          return;
+        }
+        if (current()) {
           setError('');
-          setBundle(previous => previous?.id === id ? { ...previous, ...status } : previous);
+          setBundle(previous => previous?.id === id && previous.sourceHash === status.sourceHash ? { ...previous, ...status } : previous);
         }
         if (!['queued', 'running', 'pending'].includes(status.state)) {
           const value = await apiRequest('default', `/plans/${encodeURIComponent(id)}`);
-          if (alive) acceptBundle(value);
-        } else if (alive) {
+          if (current()) acceptBundle(value);
+        } else if (current()) {
           timer = setTimeout(poll, 2000);
         }
       } catch (failure) {
-        if (alive) {
+        if (current()) {
           setError(`Status check failed: ${failure.message}. Tracking will resume when the backend is available.`);
           if (!failure.status || failure.status >= 500) timer = setTimeout(poll, 3000);
         }
@@ -148,7 +169,7 @@ export default function Workspace() {
     }
     timer = setTimeout(poll, 2000);
     return () => { alive = false; clearTimeout(timer); };
-  }, [bundle?.id, bundle?.jobId, bundle?.state, sameOrg, acceptBundle]);
+  }, [bundle?.id, bundle?.jobId, bundle?.state, bundle?.sourceHash, sameOrg, acceptBundle]);
 
   useEffect(() => {
     try { localStorage.setItem(GENERATION_JOB_KEY, JSON.stringify(generationJobs)); } catch { /* Server remains authoritative. */ }
@@ -287,6 +308,21 @@ export default function Workspace() {
       }
       await pushMessage(threadId, { role: 'user', content: text.trim() });
       if (visible()) { setInputMessage(''); setError(''); }
+      if (!fresh && repairRequest(text)) {
+        if (!bundle && repairTicket && requirement.trim()) {
+          await run('fix-generation', '', requirement, '', threadId);
+          return;
+        }
+        if (bundle && (canRepair || bundle.state === 'failed')) {
+          const target = repairTarget(bundle, component => componentErrors(bundle, component));
+          if (!target) {
+            await reply(threadId, 'Which component should I fix?', 'message');
+            return;
+          }
+          await run(target.metadataType === 'Flow' ? 'repair-plan' : 'repair', target.fullName, '', '', threadId);
+          return;
+        }
+      }
       const decision = await apiRequest('default', '/workspace/respond', { method: 'POST', body: {
         target_org: org, message: text.trim(),
         pending_requirement: !fresh && clarification ? requirement : '',
@@ -373,13 +409,13 @@ export default function Workspace() {
       } else if (action === 'save-source') {
         acceptBundle(await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/source`, { method: 'POST', body: { component_name: sourceEditor.name, source_hash: sourceEditor.hash, files: sourceEditor.files } }));
         setSourceEditor(null);
-      } else if (action === 'repair' || action === 'revise') {
+      } else if (action === 'repair' || action === 'repair-plan' || action === 'revise') {
         if (!sameOrg || !canRevise) throw new Error('Select the original org and check the saved operation before revising.');
         if (action === 'repair' && !componentName) throw new Error('Select a component to repair.');
-        const body = action === 'repair' ? { component_name: componentName, instruction: repairNote, source_hash: bundle.sourceHash } : { requirement: editText };
-        const result = await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/${action}`, { method: 'POST', body });
+        const body = action === 'repair-plan' ? { component_name: componentName, source_hash: bundle.sourceHash } : action === 'repair' ? { component_name: componentName, instruction: repairNote, source_hash: bundle.sourceHash } : { requirement: editText };
+        const result = await apiRequest(kind, `/plans/${encodeURIComponent(bundle.id)}/${action === 'repair-plan' ? 'repair' : action}`, { method: 'POST', body });
         acceptBundle(result);
-        await reply(threadId, action === 'repair' ? 'Component source repaired. Review the changes and approve again.' : 'A revised draft is ready for review.', 'plan', result.requirement, result.id);
+        await reply(threadId, ['repair','repair-plan'].includes(action) ? 'Component source repaired. Review the changes and approve again.' : 'A revised draft is ready for review.', 'plan', result.requirement, result.id);
         setRepairEditor(null); setRepairInstruction('');
         setTab('chat');
       } else if (action === 'reject') {
@@ -536,8 +572,8 @@ export default function Workspace() {
           {bundle && <section className="ws-plan">
             <div className="ws-plan-header"><div><h2>{bundle.componentName}</h2><p>Implementation plan · {orgName}</p></div><span className={`ws-badge ${bundle.state === 'deployed' || bundle.state === 'validated' ? 'success' : ''}`}>{statusLabel(bundle)}</span></div>
             {bundle.state !== 'deployed' && <div className="ws-selection"><span>{selectedComponents.length} of {components.length} components selected</span><div>{['Valid only', 'All', 'None'].map(choice => <button key={choice} className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !canRevise} onClick={() => setSelectedComponents(choice === 'None' ? [] : components.filter(component => choice === 'All' || !componentErrors(bundle, component).length).map(item => `${item.metadataType}:${item.fullName}`))}>{choice}</button>)}</div></div>}
-            <div className="ws-components">{components.map(item => <div className="ws-component" key={`${item.metadataType}:${item.fullName}`}>{bundle.state !== 'deployed' && <input type="checkbox" aria-label={`Select ${item.fullName}`} checked={selectedComponents.includes(`${item.metadataType}:${item.fullName}`)} disabled={Boolean(busy || queuedGeneration) || !canRevise || !sameOrg} onChange={event => setSelectedComponents(previous => event.target.checked ? [...previous, `${item.metadataType}:${item.fullName}`] : previous.filter(key => key !== `${item.metadataType}:${item.fullName}`))} />}<Code2 size={20} /><div><strong>{item.fullName}</strong><small>{item.metadataType}</small>{item.metadataType === 'PermissionSet' && <div><small>Access granted by this Permission Set:</small>{permissionGrantSummary(bundle, item.fullName).map((grant, index) => <small key={`grant:${index}`}>{grant}</small>)}<small>Other profiles and Permission Sets may grant additional access.</small></div>}{relatedCoverageNotes(bundle, item).map((message, index) => <small role="status" key={`coverage:${index}`}>{message}</small>)}{componentErrors(bundle, item).map((message, index) => <small className="ws-log-failure" key={index}>{message}</small>)}</div><span className="ws-badge">CREATE</span>{bundle.state === 'deployed' && item.metadataType === 'PermissionSet' && <button type="button" className="ws-button secondary" disabled={locked || !sameOrg} onClick={() => setPermissionAssignment({ name: item.fullName, username: '', confirmed: false })}>Assign to user</button>}{bundle.state === 'deployed' && item.metadataType === 'Flow' && <div className="ws-component-actions"><button type="button" className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || bundle.flowActivations?.[item.fullName]?.state === 'active'} onClick={() => run('activate-flow',item.fullName)}>{busy === 'activate-flow' && activeComponent === item.fullName ? 'Activating…' : bundle.flowActivations?.[item.fullName]?.state === 'active' ? 'Active' : ['running','unknown'].includes(bundle.flowActivations?.[item.fullName]?.state) ? 'Check activation' : 'Activate'}</button>{bundle.flowActivations?.[item.fullName]?.message && <small role="status">{bundle.flowActivations[item.fullName].message}</small>}</div>}{bundle.state !== 'deployed' && <div className="ws-component-actions"><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => openSourceEditor(item)}><Pencil size={14} />Edit</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => { if (componentErrors(bundle, item).length || canRepair) run('repair', item.fullName, '', ''); else { setRepairEditor(item.fullName); setRepairInstruction(''); } }}><Wrench size={14} />{busy === 'repair' && activeComponent === item.fullName ? 'Fixing…' : 'Fix with AI'}</button></div>}</div>)}</div>
-            {bundle.operation === 'deploy' && <section className="ws-deployment" aria-live="polite"><h3>{bundle.state === 'deployed' ? `Done — ${components.length}/${components.length}` : bundle.state === 'failed' ? 'Deployment failed' : 'Deploying selected components…'}{['deployed', 'failed'].includes(bundle.state) && bundle.operationSeconds != null && ` in ${Number(bundle.operationSeconds).toFixed(1)}s`}</h3><p>{orgName} · Job {bundle.jobId || 'being submitted'}</p><div className="ws-deployment-log">{bundle.state === 'deployed' && components.map(item => <div key={`${item.metadataType}:${item.fullName}`} className="ws-log-success">✓ CREATE {item.metadataType} — {item.fullName}: deployed</div>)}{(bundle.lastResult?.result?.details?.componentFailures || []).map((failure, index) => <div key={index} className="ws-log-failure">✕ {failure.fullName || failure.fileName}: {failure.problem}</div>)}{!['deployed', 'failed'].includes(bundle.state) && <div>Waiting for Salesforce completion. Status refreshes automatically.</div>}</div><progress aria-label="Deployment progress" max="1" {...(bundle.state === 'deployed' ? { value: 1 } : {})} /></section>}
+            <div className="ws-components">{components.map(item => <div className="ws-component" key={`${item.metadataType}:${item.fullName}`}>{bundle.state !== 'deployed' && <input type="checkbox" aria-label={`Select ${item.fullName}`} checked={selectedComponents.includes(`${item.metadataType}:${item.fullName}`)} disabled={Boolean(busy || queuedGeneration) || !canRevise || !sameOrg} onChange={event => setSelectedComponents(previous => event.target.checked ? [...previous, `${item.metadataType}:${item.fullName}`] : previous.filter(key => key !== `${item.metadataType}:${item.fullName}`))} />}<Code2 size={20} /><div><strong>{item.fullName}</strong><small>{item.metadataType}</small>{item.metadataType === 'PermissionSet' && <div><small>Access granted by this Permission Set:</small>{permissionGrantSummary(bundle, item.fullName).map((grant, index) => <small key={`grant:${index}`}>{grant}</small>)}<small>Other profiles and Permission Sets may grant additional access.</small></div>}{relatedCoverageNotes(bundle, item).map((message, index) => <small role="status" key={`coverage:${index}`}>{message}</small>)}{componentErrors(bundle, item).map((message, index) => <small className="ws-log-failure" key={index}>{message}</small>)}</div><span className="ws-badge">CREATE</span>{bundle.state === 'deployed' && item.metadataType === 'PermissionSet' && <button type="button" className="ws-button secondary" disabled={locked || !sameOrg} onClick={() => setPermissionAssignment({ name: item.fullName, username: '', confirmed: false })}>Assign to user</button>}{bundle.state === 'deployed' && item.metadataType === 'Flow' && <div className="ws-component-actions"><button type="button" className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || bundle.flowActivations?.[item.fullName]?.state === 'active'} onClick={() => run('activate-flow',item.fullName)}>{busy === 'activate-flow' && activeComponent === item.fullName ? 'Activating…' : bundle.flowActivations?.[item.fullName]?.state === 'active' ? 'Active' : ['running','unknown'].includes(bundle.flowActivations?.[item.fullName]?.state) ? 'Check activation' : 'Activate'}</button>{bundle.flowActivations?.[item.fullName]?.message && <small role="status">{bundle.flowActivations[item.fullName].message}</small>}</div>}{bundle.state !== 'deployed' && <div className="ws-component-actions"><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => openSourceEditor(item)}><Pencil size={14} />Edit</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !sameOrg || !canRevise} onClick={() => { if (componentErrors(bundle, item).length || canRepair) run(item.metadataType === 'Flow' ? 'repair-plan' : 'repair', item.fullName, '', ''); else { setRepairEditor(item.fullName); setRepairInstruction(''); } }}><Wrench size={14} />{busy === 'repair' && activeComponent === item.fullName ? 'Fixing…' : 'Fix with AI'}</button></div>}</div>)}</div>
+            {bundle.operation === 'deploy' && <section className="ws-deployment" aria-live="polite"><h3>{bundle.state === 'deployed' ? `Done — ${components.length}/${components.length}` : bundle.state === 'failed' ? 'Deployment failed' : 'Deploying selected components…'}{['deployed', 'failed'].includes(bundle.state) && bundle.operationSeconds != null && ` in ${Number(bundle.operationSeconds).toFixed(1)}s`}</h3><p>{orgName} · Job {bundle.jobId || 'being submitted'}</p><div className="ws-deployment-log">{bundle.state === 'deployed' && components.map(item => <div key={`${item.metadataType}:${item.fullName}`} className="ws-log-success">✓ CREATE {item.metadataType} — {item.fullName}: deployed</div>)}{bundle.state === 'failed' && <div className="ws-log-failure">Salesforce reported a failure. See the affected components and package errors below.</div>}{!['deployed', 'failed'].includes(bundle.state) && <div>Waiting for Salesforce completion. Status refreshes automatically.</div>}</div><progress aria-label="Deployment progress" max="1" {...(bundle.state === 'deployed' ? { value: 1 } : {})} /></section>}
             {bundle.testClasses?.length > 0 && <p className="ws-plan-note">Tests: {bundle.testClasses.join(', ')}</p>}
 
             {bundle.localChecks?.warnings?.length > 0 && <pre className="ws-results">{JSON.stringify(bundle.localChecks.warnings, null, 2)}</pre>}
@@ -572,15 +608,15 @@ export default function Workspace() {
           {archivedPlan && <section className="ws-status"><h3>Saved plan · {archivedPlan.id}</h3><p>{archivedPlan.plan?.summary}</p><p>{statusText(archivedPlan)}</p>{Object.entries(archivedPlan.files).map(([path, source]) => <details key={path}><summary>{path}</summary><pre style={{ overflow: 'auto' }}>{source}</pre></details>)}<button className="ws-button secondary" onClick={() => setArchivedPlan(null)}>Close saved plan</button></section>}
           {permissionAssignment && <section className="ws-status"><h3>Assign {permissionAssignment.name}</h3><p>This grants the deployed Permission Set's access to one Salesforce user. Review its permissions before confirming.</p><label>Exact Salesforce username<input className="ws-input" value={permissionAssignment.username} disabled={Boolean(busy)} onChange={event => setPermissionAssignment(previous => ({ ...previous, username: event.target.value, confirmed: false }))} /></label><label><input type="checkbox" checked={permissionAssignment.confirmed} disabled={Boolean(busy)} onChange={event => setPermissionAssignment(previous => ({ ...previous, confirmed: event.target.checked }))} />I confirm granting this Permission Set to the specified user.</label><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy) || !permissionAssignment.username.trim() || !permissionAssignment.confirmed} onClick={() => run('assign-permission-set', permissionAssignment.name)}>Confirm assignment</button><button className="ws-button secondary" disabled={Boolean(busy)} onClick={() => setPermissionAssignment(null)}>Cancel</button></div></section>}
           {sourceEditor && <section className="ws-status"><h3>Edit source · {sourceEditor.name}</h3><p>Save changes, review the files, then approve again. Salesforce validation checks deployment compatibility.</p><div className="ws-plan-footer">{Object.keys(sourceEditor.files).map(path => <button key={path} className="ws-button secondary" onClick={() => setSourceEditor(previous => ({ ...previous, path }))}>{path.split('/').pop()}</button>)}</div><textarea className="ws-input ws-edit-request" style={{ minHeight: 360, fontFamily: 'monospace', width: '100%' }} spellCheck={false} aria-label={`Source ${sourceEditor.path}`} value={sourceEditor.files[sourceEditor.path]} disabled={Boolean(busy || queuedGeneration)} onChange={event => { const text = event.target.value; setSourceEditor(previous => ({ ...previous, files: { ...previous.files, [previous.path]: text } })); }} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !sameOrg} onClick={() => run('save-source', sourceEditor.name)}>Save source</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setSourceEditor(null)}>Cancel</button></div></section>}
-          {repairEditor && <section className="ws-status"><h3>Fix with AI · {repairEditor}</h3><p>AI will use the saved error and this component’s source. Describe any additional correction you want.</p><textarea className="ws-input ws-edit-request" aria-label="AI correction instructions" value={repairInstruction} disabled={Boolean(busy || queuedGeneration)} onChange={event => setRepairInstruction(event.target.value)} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || (!repairInstruction.trim() && !canRepair)} onClick={() => run('repair', repairEditor)}>{busy === 'repair' ? 'Fixing…' : 'Apply AI fix'}</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setRepairEditor(null)}>Cancel</button></div></section>}
+          {repairEditor && <section className="ws-status"><h3>Fix with AI · {repairEditor}</h3><p>AI will use the saved error and this component’s source. Describe any additional correction you want.</p><textarea className="ws-input ws-edit-request" aria-label="AI correction instructions" value={repairInstruction} disabled={Boolean(busy || queuedGeneration)} onChange={event => setRepairInstruction(event.target.value)} /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || (!repairInstruction.trim() && !canRepair)} onClick={() => run(components.find(item => item.fullName === repairEditor)?.metadataType === 'Flow' ? 'repair-plan' : 'repair', repairEditor)}>{busy === 'repair' ? 'Fixing…' : 'Apply AI fix'}</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setRepairEditor(null)}>Cancel</button></div></section>}
           {editRequest && <section className="ws-status"><h3>Edit {editRequest}</h3><p>Update the requirement or describe the component change. This generates a new draft; its files need fresh approval.</p><textarea className="ws-input ws-edit-request" value={editText} disabled={Boolean(busy || queuedGeneration)} onChange={event => setEditText(event.target.value)} aria-label="Updated requirement" /><div className="ws-plan-footer"><button className="ws-button" disabled={Boolean(busy || queuedGeneration) || !editText.trim()} onClick={() => run('revise')}>Generate revised plan</button><button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => setEditRequest(null)}>Cancel</button></div></section>}
-          {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{packageErrors(bundle).map((message, index) => <p className="ws-error" key={index}>{message}</p>)}{bundle.state === 'failed' && bundle.jobId && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('report')}>Load Salesforce error details</button>}{bundle.lastResult?.result?.details?.componentFailures?.length > 0 && <ul className="ws-error">{bundle.lastResult.result.details.componentFailures.map((failure, index) => <li key={`${failure.fileName}:${index}`}><strong>{failure.fileName || failure.fullName}</strong>: {failure.problem}</li>)}</ul>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
+          {bundle && <section className="ws-status" aria-live="polite"><strong>{statusText(bundle)}</strong><p>Operation: {bundle.operation === 'validate' ? 'Validation' : bundle.operation === 'deploy' ? 'Deployment' : 'Plan generation'}{bundle.jobId ? ` · Job: ${bundle.jobId}` : ''}</p>{bundle.error && <p className="ws-error">{bundle.error}</p>}{packageErrors(bundle).map((message, index) => <p className="ws-error" key={index}>{message}</p>)}{bundle.state === 'failed' && bundle.jobId && !bundle.lastResult && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration)} onClick={() => run('report')}>Refresh Salesforce results</button>}{components.some(item => item.metadataType === 'LightningComponentBundle') && <p>LWC behavior tests: {bundle.behavioralChecks?.state || 'not run'}. Salesforce validation does not verify UI behavior.</p>}{bundle.nextAction && <p>{bundle.nextAction}</p>}{bundle.errorDetails && <details><summary>Technical details</summary><pre className="ws-results">{bundle.errorDetails.type}: {bundle.errorDetails.message}</pre></details>}{bundle.lastResult && <details><summary>Salesforce results, tests and coverage</summary><pre className="ws-results">{JSON.stringify(bundle.lastResult, null, 2)}</pre></details>}</section>}
           {(approving || (approved && busy === 'validate')) && <div className="ws-status" role="status">Saving approval…</div>}
           {busy && !generationInThisChat && <div className="ws-status" role="status"><span className="ws-spinner" />{['send','clarify','generate','fix-generation'].includes(busy) ? 'Thinking…' : busy === 'repair' ? 'AI is reviewing the saved failure and generating a corrected draft…' : busy === 'revise' ? 'Generating your revised plan…' : `${busy}: waiting for Salesforce…`}</div>}
           {information && <section className="ws-status" role="status"><h3>Workspace update</h3><p>{information}</p></section>}
           {clarification && !messages.some(message => message.role === 'assistant' && message.kind === 'clarification' && message.content === clarification.question) && <div className="ws-assistant" aria-live="polite"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{clarification.question}</p></div></div>}
           {generationInThisChat && <div className="ws-assistant" role="status"><div className="ws-avatar"><Bot size={20} /></div><div className="ws-response"><p>{jobProgress?.state === 'reconnecting' ? 'Reconnecting to your saved request…' : 'Thinking…'}</p></div></div>}
-          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && !/oauth|authentication|expired.*token|reconnect|connection|permission|forbidden/i.test(error) && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />{repairTicket ? 'Fix with AI' : 'Retry generation'}</button>}{/oauth|authentication|expired.*token|reconnect|org.*connection/i.test(error) && <Link className="ws-settings-toggle" to="/settings#salesforce">Reconnect Salesforce</Link>}</div>}
+          {error && !clarification && error !== bundle?.error && <div className="ws-error" role="alert"><strong>Unable to complete the request</strong><p>{error}</p>{!bundle && !clarification && requirement.trim() && !/oauth|authentication|expired.*token|reconnect|connection|permission|forbidden/i.test(error) && <button className="ws-button secondary" disabled={Boolean(busy || queuedGeneration) || !org || activeOrg?.status === 'Reconnect required'} onClick={() => run('fix-generation')}><Wrench size={15} />{'Retry generation'}</button>}{/oauth|authentication|expired.*token|reconnect|org.*connection/i.test(error) && <Link className="ws-settings-toggle" to="/settings#salesforce">Reconnect Salesforce</Link>}</div>}
         </div>
 
         <footer className="ws-composer-area">

@@ -16,12 +16,8 @@ from Backend.AI.app.services.apex_validator import validate_apex_source
 
 SUPPORTED_ACTION = "CREATE"
 
-# Phase 1 executable metadata-spec families.
-#
-# Apex / LWC / application metadata are intentionally
-# not accepted here yet. They are known by the capability
-# registry and planning layer, but each will receive its own
-# metadata/code specification and generator in later phases.
+# Deterministic CREATE families supported by the current validator.
+# LWC uses its separate source model and compiler/controller contract checks.
 SUPPORTED_METADATA_TYPES = {
     "CustomObject",
     "CustomField",
@@ -130,6 +126,7 @@ class MetadataItem(BaseModel):
     - CustomObject
     - CustomField
     - ValidationRule
+    - PermissionSet (minimal verified grants)
     - Flow (strict supported trigger/resource contracts)
     - ApexClass and ApexTrigger (local checks; Salesforce compilation required)
 

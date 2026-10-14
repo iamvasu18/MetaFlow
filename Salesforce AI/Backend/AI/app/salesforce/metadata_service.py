@@ -54,39 +54,16 @@ class SalesforceMetadataService:
 
             C:\\Program Files\\sf\\bin\\sf.CMD
 
-        Build one correctly quoted command line and let cmd.exe
-        execute it so spaces in the executable path and SOQL
-        query arguments are preserved.
+        Resolve the CLI Node entry point and pass an argument array.
+        Caller arguments are never interpreted by cmd.exe or a shell.
         """
 
-        sf_command = shutil.which("sf")
-
-        if not sf_command:
-            raise RuntimeError(
-                "Salesforce CLI 'sf' was not found in PATH."
-            )
-
-        # Replace the generic "sf" entry with the exact
-        # executable discovered from PATH.
-        command = [
-            sf_command,
-            *command[1:],
-        ]
-
-        # Quote every argument correctly for Windows.
-        command_line = subprocess.list2cmdline(
-            command
-        )
-
-        comspec = os.environ.get(
-            "COMSPEC",
-            "cmd.exe",
-        )
+        from Backend.AI.app.services.sf_process import sf_arguments
+        command = sf_arguments(command)
 
         result = subprocess.run(
-            command_line,
-            shell=True,
-            executable=comspec,
+            command,
+            shell=False,
             capture_output=True,
             text=True,
             encoding="utf-8",

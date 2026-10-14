@@ -158,7 +158,9 @@ def compact_planning_context(requirement: str, metadata: dict) -> dict:
         r"|\bcall\b.*\bflow\b", requirement, re.I,
     )
     result = {k: v for k, v in metadata.items()
-              if k in {"orgTimeZone", "validationRuleDiscovery", "focusedObjectRequest", "discoveryScope", "permissionSetCapabilities", "flowDependencies"} and (k != "flowDependencies" or action_request)}
+              if k in {"orgTimeZone", "validationRuleDiscovery", "focusedObjectRequest", "discoveryScope", "permissionSetCapabilities", "flowDependencies", "namedCredentials"} and (k != "flowDependencies" or action_request)}
+    if isinstance(result.get('validationRuleDiscovery'),dict):
+        result['validationRuleDiscovery'] = {k: result['validationRuleDiscovery'][k] for k in ('status','objects','activeRuleCount','reason') if k in result['validationRuleDiscovery']}
     result["objects"] = []
     for obj in metadata.get("objects", []):
         fields = obj.get("fields", [])
@@ -185,7 +187,13 @@ def compact_planning_context(requirement: str, metadata: dict) -> dict:
         projected = []
         for field in fields:
             if field.get("name") in selected:
-                projected.append(dict(field))
+                projected.append({k: field[k] for k in (
+                    'name','label','type','required','nillable','createable','updateable',
+                    'calculated','calculatedFormula','autoNumber','nameField','length',
+                    'precision','scale','referenceTo','relationshipName','defaultedOnCreate',
+                    'defaultValue','defaultValueFormula','controllerName','dependentPicklist',
+                    'picklistValues','values','restrictedPicklist','unique','externalId'
+                ) if k in field})
             else:
                 summary = {k: field[k] for k in (
                     "name", "label", "type", "required", "createable", "updateable",
@@ -200,12 +208,77 @@ def compact_planning_context(requirement: str, metadata: dict) -> dict:
         # Relationship identity remains on each field; retain unusual standalone entries.
         if obj.get("relationships"):
             compact["relationships"] = [{k: r[k] for k in ("name", "relationshipName", "childSObject", "field") if k in r} for r in obj["relationships"] if isinstance(r, dict)]
+        if compact.get('validationRules'):
+            compact['validationRules'] = [{k: rule[k] for k in ('fullName','name','active','errorConditionFormula','errorMessage','errorDisplayField') if k in rule} for rule in compact['validationRules']]
         result["objects"].append(compact)
     result["contextPolicy"] = (
         "Every selected object's field name/type inventory is included. Fields marked "
         "detailsOmitted have abbreviated metadata, not empty picklists or absent formulas. "
         "Do not invent omitted values or formulas. Report missing configuration if needed."
     )
-    if len(json.dumps(result, ensure_ascii=True, separators=(',', ':'))) > 240000:
-        raise ValueError('Relevant Salesforce context is still too large for one draft. No generation request was sent. Narrow the requested objects or split the implementation; full metadata remains available for validation.')
+    # A large org should not make an otherwise actionable request fail before
+    # generation.  Escalate from full inventories to a focused projection;
+    # never confuse omitted metadata with a missing field or an empty value.
+    # The caller retains the original discovery data for semantic validation.
+    MAX_CONTEXT_CHARS = 180000  # margin below the provider's overall input budget
+
+    def size():
+        return len(json.dumps(result, ensure_ascii=True, separators=(',', ':')))
+
+    if size() > MAX_CONTEXT_CHARS:
+        for obj in result['objects']:
+            # Keep detailed fields. Replace nonselected fields with a compact
+            # inventory so large unrelated picklists cannot exhaust the prompt.
+            fields = obj.get('fields', [])
+            summaries = [f for f in fields if f.get('detailsOmitted')]
+            if summaries:
+                obj['fields'] = [f for f in fields if not f.get('detailsOmitted')]
+                obj['omittedFieldNames'] = [f['name'] for f in summaries if f.get('name')]
+                obj['omittedFieldDetailsCount'] = len(summaries)
+        result['contextPolicy'] += (
+            ' omittedFieldNames lists fields whose details are not supplied. '
+            'Never assume absent field details or enum values. Fetch them from '
+            'the authoritative Salesforce context before using them.'
+        )
+
+    if size() > MAX_CONTEXT_CHARS:
+        # Even the inventory may exceed the budget in exceptional orgs.
+        # Keep the counts, not an arbitrarily incomplete prefix of names.
+        for obj in result['objects']:
+            if obj.pop('omittedFieldNames', None) is not None:
+                obj['fieldInventoryOmitted'] = True
+        result['contextPolicy'] += (
+            ' fieldInventoryOmitted means other fields exist but their names '
+            'are not provided here; absence from this projection is NOT proof '
+            'that a Salesforce field does not exist.'
+        )
+
+    if size() > MAX_CONTEXT_CHARS:
+        # Pathological descriptions/formulas on required or directly mentioned
+        # fields must not be copied wholesale into an LLM prompt. Mark every
+        # excluded value explicitly, preserving identity and type; the full
+        # value still exists in the original metadata for authoritative checks.
+        detailed_keys = ('calculatedFormula', 'defaultValueFormula', 'defaultValue',
+                         'picklistValues', 'values')
+        for obj in result['objects']:
+            for field in obj.get('fields', []):
+                omitted = []
+                for key in detailed_keys:
+                    if key in field and len(json.dumps(field[key], ensure_ascii=True)) > 8000:
+                        del field[key]
+                        omitted.append(key)
+                if omitted:
+                    field['oversizeDetailsOmitted'] = omitted
+        result['contextPolicy'] += (
+            ' oversizeDetailsOmitted lists specific large values excluded from '
+            'the prompt; their content is UNKNOWN to generation, not empty. '
+            'Do not generate dependent formulas/picklists until retrieved.'
+        )
+
+    if size() > MAX_CONTEXT_CHARS:
+        raise ValueError(
+            'Required Salesforce metadata remains too large after conservative '
+            'projection. Generation was stopped rather than losing needed '
+            'schema facts. Divide the requirement into validated stages.'
+        )
     return result

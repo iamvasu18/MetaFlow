@@ -1,9 +1,10 @@
+<!-- RETIRED: historical reference only. Runtime planning uses requirement_to_plan_v002.md. -->
 # Requirement to Plan Prompt
 
 Prompt ID: planning
 Version: v001
 Task: requirement_to_plan
-Status: active
+Status: retired
 
 ## ROLE
 

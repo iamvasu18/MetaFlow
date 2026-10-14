@@ -33,14 +33,15 @@ def test_unreadable_code_cannot_support_reuse_claim():
         def query(self,q,tooling=False):return {'records':[{'Body':None}]} if 'SELECT Body' in q else super().query(q,tooling)
     p=Provider([{'match':True,'matchingComponents':['AccountService'],'response':'Reuse AccountService.'}])
     with pytest.raises(ValueError,match='readable source'):inspect_reuse(Hidden(),'ApexClass','Get Accounts',p,'AccountService')
-def test_new_code_requirement_stops_for_source_supported_reuse_question():
+def test_explicit_new_code_requirement_builds_without_reuse_question():
     p=Provider([
         {'action':'build','requirement':'Create Account getter class','code_kind':'ApexClass'},
         {'candidates':['AccountService']},
         {'match':True,'matchingComponents':['AccountService'],'response':'AccountService already retrieves Accounts. Reuse it or create a separate class?'}])
     result=respond(ConversationTurn(target_org='org',message='Create an Apex getter for Accounts'),p,lambda:Api())
-    assert result['action']=='clarify'
-    assert 'AccountService' in result['response']
+    assert result['action']=='build'
+    assert result['requirement'] == 'Create Account getter class'
+    assert len(p.calls) == 1
 
 def test_explicit_reuse_acknowledges_without_repeating_choice():
     class Inventory(Api):

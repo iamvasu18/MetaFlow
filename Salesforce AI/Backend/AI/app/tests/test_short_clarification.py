@@ -28,3 +28,8 @@ def test_supplied_field_name_and_parent_retained_default_type():
 def test_permission_grant_is_not_assumed():
     result=concise_clarification(Intent(action='clarify',requested_type='PermissionSet',blocking_detail='access',requirement='Create a permission set',response='Give all settings'))
     assert result.action=='clarify'
+
+def test_genuine_blocker_keeps_a_short_requirement_specific_question():
+    result=concise_clarification(Intent(action='clarify',blocking_detail='behavior',requested_type='ApexClass',requirement='Implement the Contact handler',response='Which status should the handler apply?'))
+    assert result.response=='Which status should the handler apply?'
+    assert result.action=='clarify'

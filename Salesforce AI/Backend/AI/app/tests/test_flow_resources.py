@@ -78,7 +78,11 @@ def test_planning_retrieves_and_preserves_formula_dependencies():
     prompt=provider.generate.call_args.kwargs['user_prompt']
     assert 'calculatedFormula' in prompt and 'Start_Date__c' in prompt
     assert service._run_sf_command.call_count==1
-    assert SalesforceContextSelector().select('Field List',context())['objects'][0]['fields']==fields()
+    selected = SalesforceContextSelector().select('Field List days',context())['objects'][0]['fields']
+    by_name = {field['name']: field for field in selected}
+    assert by_name['Days_of_Field__c']['calculatedFormula'] == 'TODAY() - Start_Date__c'
+    assert by_name['Start_Date__c']['type'] == 'date'
+    assert context()['objects'][0]['fields'] == fields()
 
 
 def test_formula_xml_reference_and_order(project):

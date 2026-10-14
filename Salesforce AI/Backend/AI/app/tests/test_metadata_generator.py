@@ -962,7 +962,7 @@ def test_custom_field_requires_object_field_format(
 
         match=(
 
-            "CustomField fullName must use"
+            "Invalid CustomField fullName"
 
         ),
 

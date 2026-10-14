@@ -72,6 +72,8 @@ def test_planned_objects_are_not_described_as_existing():
 
 def test_generate_metadata_endpoint_passes_discovered_context(monkeypatch):
     import Backend.AI.app.main as main
+    monkeypatch.setenv("APP_ENABLE_LEGACY_WORKFLOW", "true")
+    monkeypatch.setattr(main, "target_org", lambda: "AIOrg")
     approved=plan(); expected={'objects':[{'name':'Field_List__c','fields':[{'name':'Phone_Number__c'}]}]}
     monkeypatch.setattr(main.plan_store,'get',lambda _:approved)
     org=Mock();org.get_context.return_value=deepcopy(expected)

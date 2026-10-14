@@ -310,7 +310,7 @@ def validate_flow(full_name, label, config):
 
 def scalar_type(field):
     return {'string':'String','text':'String','textarea':'String','longtextarea':'String',
-            'email':'String','phone':'String','url':'String','picklist':'String',
+            'email':'String','phone':'String','url':'String','picklist':'String','combobox':'String',
             'int':'Number','integer':'Number','double':'Number','number':'Number',
             'currency':'Number','percent':'Number','boolean':'Boolean','checkbox':'Boolean',
             'date':'Date','datetime':'DateTime'}.get(str(field.get('type', '')).lower())

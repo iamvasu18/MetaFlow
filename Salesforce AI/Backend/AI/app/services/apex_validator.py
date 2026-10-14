@@ -96,15 +96,42 @@ def loop_bodies(code):
 def _warnings(code, source):
     warnings = []
     for body in loop_bodies(code):
-        if re.search(r'\bSELECT\b|\bDatabase\s*\.\s*(?:query|countQuery)',body,re.I):
+        if re.search(r'\bSELECT\b|\bDatabase\s*\.\s*(?:query|countQuery)(?:WithBinds)?\s*\(',body,re.I):
             warnings.append('Query execution appears inside a loop; bulkification review is required.')
         if re.search(r'\b(?:insert|update|upsert|delete|undelete|merge)\b',body,re.I):
             warnings.append('DML appears inside a loop; bulkification review is required.')
-    if re.search(r'\bDatabase\s*\.\s*(?:query|countQuery)',code,re.I):
+    if re.search(r'\bDatabase\s*\.\s*(?:query|countQuery)(?:WithBinds)?\s*\(',code,re.I):
         warnings.append('Dynamic SOQL requires bind-variable and injection review.')
     if re.search(r"'[A-Za-z0-9]{15}(?:[A-Za-z0-9]{3})?'",source):
         warnings.append('Possible hard-coded Salesforce Id; review configuration and test data.')
     return list(dict.fromkeys(warnings))
+
+
+def _soql_clause_errors(code):
+    """Catch clause-order failures without treating strings/comments as queries.
+
+    This is intentionally a small, conservative check, not an Apex/SOQL parser.
+    Salesforce check-only compilation remains authoritative.
+    """
+    errors = []
+    for query in re.findall(r'\[\s*SELECT\b.*?\]', code, re.I | re.S):
+        user_mode = re.search(r'\bWITH\s+(?:USER_MODE|SYSTEM_MODE)\b', query, re.I)
+        if not user_mode:
+            continue
+        later = query[user_mode.end():]
+        if re.search(r'\b(?:WHERE|GROUP\s+BY|HAVING)\b', later, re.I):
+            errors.append('SOQL WITH USER_MODE/SYSTEM_MODE must follow WHERE, GROUP BY and HAVING clauses; it cannot precede WHERE.')
+    return list(dict.fromkeys(errors))
+
+
+def _blocking_bulk_findings(code):
+    errors = []
+    for body in loop_bodies(code):
+        if re.search(r'\bSELECT\b|\bDatabase\s*\.\s*(?:query|countQuery)(?:WithBinds)?\s*\(', body, re.I):
+            errors.append('Query execution inside a loop is prohibited; collect keys and query once outside the loop.')
+        if re.search(r'(?<![\w.])(?:insert|update|upsert|delete|undelete|merge)\s+(?=[A-Za-z_(])|\bDatabase\s*\.\s*(?:insert|update|upsert|delete|undelete|merge)\s*\(', body, re.I):
+            errors.append('DML execution inside a loop is prohibited; collect records and write once outside the loop.')
+    return list(dict.fromkeys(errors))
 
 
 def validate_apex_class_config(full_name: str, config: dict[str, Any]) -> list[str]:
@@ -120,6 +147,27 @@ def validate_apex_class_config(full_name: str, config: dict[str, Any]) -> list[s
         return errors + ['ApexClass config.body is required.']
     code, structural = lexical_source(body)
     errors.extend(structural)
+    errors.extend(_blocking_bulk_findings(code))
+    errors.extend(_soql_clause_errors(code))
+    if re.search(r'\b(?:System\s*\.\s*)?Assert\s*\.\s*(?:assertEquals|assertNotEquals|assertNotNull|assertNull|assertTrue|assertFalse)\s*\(',code,re.I):
+        errors.append('Invalid Assert class method. Use System.Assert.areEqual/areNotEqual/isNotNull/isNull/isTrue/isFalse, or legacy System.assertEquals directly.')
+    if re.search(r'\bnew\s+(?:System\s*\.\s*)?Exception\s*\(',code,re.I):
+        errors.append('Exception cannot be constructed directly. Define a concrete custom class extending Exception.')
+    for query in re.findall(r'\[\s*SELECT\b.*?\]',code,re.I|re.S):
+        if re.search(r'(?<![.\w])NOW\s*\(',query,re.I):
+            errors.append('NOW() is not a SOQL function. Set a Datetime cutoff in Apex and bind :cutoff in the query.')
+    if kind == 'Test' and re.search(r'\b(?:enqueueJob|executeBatch|schedule)\s*\(',code,re.I):
+        if not (re.search(r'\bTest\s*\.\s*startTest\s*\(',code,re.I) and re.search(r'\bTest\s*\.\s*stopTest\s*\(',code,re.I)):
+            errors.append('Async tests must invoke the job between Test.startTest() and Test.stopTest().')
+    for method in re.finditer(r'@future(?:\s*\([^)]*\))?\s+([^{};]+)\{', code,re.I):
+        if not re.search(r'\bstatic\s+void\b',method.group(1),re.I):
+            errors.append('@future methods must be static and return void.')
+        params = re.search(r'\(([^)]*)\)', method.group(1))
+        if params:
+            types = re.sub(r'\b[A-Za-z][A-Za-z0-9_]*\s*(?=,|$)', '', params.group(1))
+            allowed = {'list','set','map','id','boolean','integer','long','decimal','double','string','date','datetime','time','blob'}
+            if any(word.lower() not in allowed for word in re.findall(r'[A-Za-z][A-Za-z0-9_]*',types)):
+                errors.append('@future parameters must be primitive types or collections of primitive types.')
     match = CLASS_DECLARATION.search(code)
     if not match:
         errors.append('ApexClass body must contain a class declaration.')
@@ -173,6 +221,8 @@ def validate_apex_trigger_config(full_name: str, config: dict[str, Any]) -> list
         return errors + ['ApexTrigger config.body is required.']
     code, structural = lexical_source(body)
     errors.extend(structural)
+    errors.extend(_blocking_bulk_findings(code))
+    errors.extend(_soql_clause_errors(code))
     match = TRIGGER_DECLARATION.search(code)
     if not match:
         errors.append('ApexTrigger body must contain a trigger declaration.')

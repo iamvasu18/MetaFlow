@@ -546,7 +546,7 @@ def test_provider_output_limit_is_explicit(monkeypatch):
     monkeypatch.setattr(module.anthropic,'Anthropic',lambda **kwargs:client)
     monkeypatch.setenv('ANTHROPIC_MAX_TOKENS','8192')
     provider=module.AnthropicProvider(api_key='test-key',model='test-model')
-    with pytest.raises(RuntimeError,match='output limit'):provider.generate('system','prompt')
+    with pytest.raises(RuntimeError,match=r'output(?:-token)? limit'):provider.generate('system','prompt')
     assert client.messages.create.call_args.kwargs['max_tokens']==8192
 
 
@@ -615,3 +615,15 @@ def test_record_choice_xml_stays_string():
     assert xml.find(f'{Q("dynamicChoiceSets")}/{Q("picklistField")}') is None
     c['dynamicChoices'][0]['dataType']='Picklist'
     with pytest.raises(ValueError,match='Record choice sets require String'):checked_config(c)
+
+
+def test_create_task_subject_accepts_described_combobox_text():
+    from Backend.AI.app.validators.flow_validator import validate_extended_context, ExtendedFlowConfig
+    config = ExtendedFlowConfig.model_validate({
+        'flowType':'Autolaunched','status':'Draft','startElement':'Create_Task',
+        'elements':[{'kind':'CreateRecords','name':'Create_Task','label':'Create task',
+            'object':'Task','inputAssignments':[{'field':'Subject','value':{'type':'String','value':'Follow up'}}],
+            'next':None}]})
+    metadata = {'Task':{'name':'Task','createable':True,'fields':[
+        {'name':'Subject','type':'combobox','createable':True,'length':255}]}}
+    validate_extended_context(config, metadata)

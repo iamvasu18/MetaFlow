@@ -88,20 +88,83 @@ function checkFormLifecycle(ast) {
  inspect(parsed.root);
 }
 try {
+ if(input.tests?.trim()) {
+  const testAst=parse(input.tests,{sourceType:'module',plugins:['decorators-legacy','classProperties']});
+  let cases=0, assertions=0;
+  traverse(testAst,{
+   CallExpression(p) {
+    const node=p.node;
+    if(node.callee.type==='Identifier' && ['test','it'].includes(node.callee.name)) cases++;
+    if(node.callee.type==='Identifier' && node.callee.name==='expect') { assertions++; if(['BooleanLiteral','NumericLiteral','StringLiteral','NullLiteral'].includes(node.arguments[0]?.type)) fail('Generated Jest assertions must inspect component behavior, not a constant.'); }
+    if(node.callee.type==='MemberExpression' && ['test','it','describe'].includes(node.callee.object?.name) && ['skip','only','todo'].includes(node.callee.property?.name)) fail('Generated Jest tests must not skip or focus cases.');
+   },
+   ImportDeclaration(p) {
+    const module=p.node.source.value;
+    if(module==='lwc' || module==='c/'+input.name || module==='@salesforce/sfdx-lwc-jest') return;
+    if(module.startsWith('@salesforce/apex/') && Object.prototype.hasOwnProperty.call(input.apexMethods||{},module.slice('@salesforce/apex/'.length))) return;
+    if(module.startsWith('lightning/') || module.startsWith('@salesforce/schema/')) return;
+    fail('Unverified generated Jest import: '+module);
+   }
+  });
+  if(!cases || !assertions) fail('Generated Jest tests require executable cases and assertions.');
+ }
  const ast = parse(input.javascript, {sourceType:'module', plugins:['decorators-legacy','classProperties']});
  checkFormLifecycle(ast);
  const imports = new Map();
- const modules = new Set(['lwc','lightning/uiRecordApi','lightning/uiObjectInfoApi','lightning/uiRelatedListApi','lightning/navigation','lightning/platformShowToastEvent','lightning/toast']);
+ for (const node of ast.program.body) if (node.type === 'ImportDeclaration') for (const spec of node.specifiers) imports.set(spec.local.name,{module:node.source.value, imported:spec.imported?.name});
+ const modules = new Set(['lwc','lightning/uiRecordApi','lightning/uiObjectInfoApi','lightning/uiRelatedListApi','lightning/uiListsApi','lightning/navigation','lightning/platformShowToastEvent','lightning/toast']);
+ const wireOnly = new Set(['getRecord','getRecords','getRecordUi','getRecordCreateDefaults']);
+ function checkParameters(method, argument) {
+  const expected=input.apexMethods?.[method]?.parameterNames;
+  if (!Array.isArray(expected) || argument?.type !== 'ObjectExpression') return;
+  for (const property of argument.properties) {
+   if (property.type !== 'ObjectProperty' || property.computed) { fail('Apex parameters must be explicit named properties: '+method); continue; }
+   const key=property.key.name || property.key.value;
+   if (!expected.includes(key)) fail('Unknown Apex parameter '+key+' for '+method);
+  }
+ }
  const banned = new Set(['eval','Function','fetch','XMLHttpRequest','WebSocket','Worker','localStorage','sessionStorage','document','window','globalThis','navigator']);
  const blockedMembers = new Set(['innerHTML','outerHTML','insertAdjacentHTML','write','__proto__','constructor','prototype']);
  traverse(ast, {
   ImportDeclaration(p) {
    const module=p.node.source.value;
    for (const spec of p.node.specifiers) imports.set(spec.local.name,{module, imported:spec.imported?.name});
-   if (module.startsWith('@salesforce/schema/')) {
+   if (module.startsWith('@salesforce/apex/')) {
+    const method = module.slice('@salesforce/apex/'.length);
+    if (p.node.specifiers.length !== 1 || p.node.specifiers[0].type !== 'ImportDefaultSpecifier') fail('Apex methods require a default import: '+method);
+    if (!Object.prototype.hasOwnProperty.call(input.apexMethods || {}, method)) fail('Unverified Apex controller method: '+method);
+   } else if (module === '@salesforce/apex') {
+    if (p.node.specifiers.some(spec => spec.imported?.name !== 'refreshApex')) fail('Only refreshApex is supported from @salesforce/apex.');
+   } else if (module.startsWith('@salesforce/schema/')) {
     const ref=module.slice(19).split('.');
     if (ref.length>2 || !input.objects[ref[0]] || (ref.length===2 && !input.objects[ref[0]].includes(ref[1]))) fail('Unknown schema import: '+module);
-   } else if (!modules.has(module)) fail('Unsupported import: '+module+'. This service supports LDS page components, not Apex or external modules.');
+   } else if (!modules.has(module)) fail('Unsupported import: '+module+'. Use supported UI APIs or verified package-owned Apex methods. External modules are not supported.');
+  },
+  Decorator(p) {
+   const n=p.node.expression;
+   if(n.type==='CallExpression' && imports.get(n.callee.name)?.module === 'lwc' && imports.get(n.callee.name)?.imported === 'wire' && n.arguments[0]?.type==='Identifier') {
+    const ref=imports.get(n.arguments[0].name);
+    if(ref?.module.startsWith('@salesforce/apex/')) {
+     const method=ref.module.slice('@salesforce/apex/'.length);
+     if(!input.apexMethods?.[method]?.cacheable) fail('Wired Apex method must be cacheable: '+method);
+     checkParameters(method,n.arguments[1]);
+    }
+   }
+  },
+  CallExpression(p) {
+   if(p.node.callee.type !== 'Identifier') return;
+   const ref=imports.get(p.node.callee.name);
+   if(ref?.module.startsWith('@salesforce/apex/')) {
+    checkParameters(ref.module.slice('@salesforce/apex/'.length),p.node.arguments[0]);
+    let chain=p, handled=false;
+    while(chain.parentPath?.isMemberExpression() && chain.parentPath.node.object===chain.node && chain.parentPath.parentPath?.isCallExpression()) {
+     const member=chain.parentPath, call=member.parentPath;
+     if(member.node.property.name==='catch' && call.node.arguments.length || member.node.property.name==='then' && call.node.arguments.length>1) handled=true;
+     chain=call;
+    }
+    if(!handled) fail('Imperative Apex calls require an explicit rejection handler: '+ref.module);
+   }
+   if(ref && ((ref.module === 'lightning/uiRecordApi' && wireOnly.has(ref.imported)) || ['lightning/uiObjectInfoApi','lightning/uiRelatedListApi','lightning/uiListsApi'].includes(ref.module) && ref.imported?.startsWith('get'))) fail('UI API read adapters must be used with @wire: '+ref.imported);
   },
   StringLiteral(p) {
    const value=p.node.value;

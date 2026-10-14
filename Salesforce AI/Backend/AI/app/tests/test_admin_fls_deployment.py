@@ -148,7 +148,7 @@ def test_endpoint_wires_fls_into_same_deployment(tmp_path, monkeypatch):
     existing = tmp_path / 'force-app/main/default/profiles/Admin.profile-meta.xml'
     existing.parent.mkdir(parents=True)
     existing.write_text('original local profile')
-    def retrieve_layouts(service, root):
+    def retrieve_layouts(service, root, objects=None):
         layout = new_layout(ET.fromstring(f'<CustomObject xmlns="{NS}"><nameField><type>Text</type></nameField></CustomObject>'))
         write_xml(layout, root / layout_path('Account-Account Layout'))
         profile = ET.fromstring(f'<Profile xmlns="{NS}"><layoutAssignments><layout>Account-Account Layout</layout></layoutAssignments></Profile>')
@@ -178,7 +178,8 @@ def test_endpoint_wires_fls_into_same_deployment(tmp_path, monkeypatch):
             command = SalesforceDeploymentService(project_root=self.root).build_deploy_command(plan, validation_result)
             assert command.count('--source-dir') == 3
             return {'success': True}
-    env = dict(Path=Path, tempfile=tempfile, HTTPException=HTTPException, layout_workflow=workflow,
+    from Backend.AI.app.main import DefaultApprovalRequest
+    env = dict(DefaultApprovalRequest=DefaultApprovalRequest, require_legacy_workflow=lambda: None, target_org=lambda: 'AIOrg', Path=Path, tempfile=tempfile, HTTPException=HTTPException, layout_workflow=workflow,
         plan_store=Obj(get=lambda _: plan), metadata_spec_store=Obj(get=lambda _: spec),
         validate_create_specification=validate_create_specification,
         initialize_deployment_project=initialize_deployment_project, component_path=component_path,

@@ -14,3 +14,9 @@ export function removeJob(jobs, id) {
 export function isOriginVisible(ticket, org, conversationId) {
   return ticket.targetOrg === org && ticket.conversationId === conversationId;
 }
+
+export function sameOperation(origin, current) {
+  return Boolean(origin && current && origin.chat === current.chat &&
+    origin.org === current.org && origin.id === current.id &&
+    origin.sourceHash === current.sourceHash && origin.jobId === current.jobId);
+}

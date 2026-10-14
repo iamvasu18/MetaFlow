@@ -3,6 +3,7 @@ from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 from time import perf_counter
 import logging
+from Backend.AI.app.services.observability import log_event
 from Backend.AI.app.services.planning_performance import planning_cache, timed_generation
 import hashlib
 import json
@@ -358,8 +359,7 @@ Declare dependencies using item IDs. Prefer Flow or declarative metadata when
 appropriate; do not force every requirement into Apex. Do not omit companion
 components. This execution path supports CREATE and NO_CHANGE only. Existing
 components must not be relabeled CREATE to bypass this restriction. UPDATE or
-unsupported dependencies must be reported honestly. LWC currently uses LDS/UI
-API without Apex imports. Do not pretend an Apex-connected LWC is supported.
+unsupported dependencies must be reported honestly. LWC supports LDS/UI API and same-package Apex controllers. For Apex-connected LWC declare dependency IDs for its ApexClass controller and generate coordinated tests. Do not import methods from undeclared or unverified controllers.
 Return the existing complete ImplementationPlan JSON contract, not a router
 classification, not source code, and never set user approval to APPROVED.
 """
@@ -610,6 +610,8 @@ class DefaultMetadataPipeline(ApexAutomationService):
             context=self.rule_discovery(context,request.target_org,self.version()) if self.rule_discovery else (api.enrich_validation_rules(context) if api else ApexOrgContext(self.cli).enrich(context,request.target_org,self.version()))
 
         check_planned_components(plan,request.requirement,context)
+        from Backend.AI.app.services.formula_policy import validate_picklist_formulas
+        validate_picklist_formulas(plan, context)
 
         if context.get('focusedObjectRequest'):
             expected=context['focusedObjectRequest']['fullName']
@@ -673,9 +675,14 @@ class DefaultMetadataPipeline(ApexAutomationService):
         components = {}
         tests = []
         warnings = []
+        verification_files = {}
         admin_spec = None
 
         def merge(package):
+            for path, body in package.get('verificationFiles', {}).items():
+                if path in verification_files:
+                    raise ValueError('Duplicate generated verification file: '+path)
+                verification_files[path] = body
             for path, body in package["files"].items():
                 if path in files:
                     raise ValueError(
@@ -747,6 +754,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
                         for obj in context.get('objects', [])
                         if obj.get('name')
                     ],
+                    expected_components=[(item.metadataType, item.fullName) for item in apex],
                 ),
                 provider,
             )
@@ -781,13 +789,10 @@ class DefaultMetadataPipeline(ApexAutomationService):
                 for plan_item in plan.items
             )
 
-            if depends_on_apex:
-                raise ValueError(
-                    "Apex-connected LWC generation is not "
-                    "supported by the existing LDS-only "
-                    "LWC service."
-                )
-
+            controller_names = [plan_item.fullName for plan_item in plan.items
+                if plan_item.metadataType == 'ApexClass' and plan_item.id in item.dependencies]
+            from Backend.AI.app.services.lwc_apex_contract import controller_contract
+            apex_methods = controller_contract(files, controller_names) if controller_names else {}
             package = self.lwc_service.generate(
                 LWCRequest(
                     component_name=item.fullName,
@@ -803,6 +808,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
                     ),
                 ),
                 provider,
+                apex_methods=apex_methods,
             )
 
             package["components"] = [
@@ -936,6 +942,8 @@ class DefaultMetadataPipeline(ApexAutomationService):
             "requirement": request.requirement,
             "plan": plan.model_dump(),
             "baseFiles": deepcopy(files),
+            "verificationFiles": verification_files,
+            "behavioralChecks": {"state":"pending" if verification_files else "missing", "testsGenerated":bool(verification_files)},
             "metadataSpecification": (
                 admin_spec.model_dump()
                 if admin_spec
@@ -948,6 +956,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
             "sourceHash": "",
             "state": "generated",
             "operation": None,
+            "sourceContext": {"objects":[{"name":obj["name"],"fields":[{"name":field["name"]} for field in obj.get("fields",[]) if field.get("name")]} for obj in context.get("objects",[]) if obj.get("name")]},
             "validationRuleDiscovery": context.get(
                 "validationRuleDiscovery",
                 {},
@@ -963,6 +972,23 @@ class DefaultMetadataPipeline(ApexAutomationService):
                 ),
             },
         }
+
+        # Run the same safe SOQL-order correction for initial generation as for
+        # Fix with AI; keep baseFiles consistent with the reviewed source.
+        from Backend.AI.app.services.apex_soql_recovery import correct_user_mode_order
+        corrected_paths = []
+        for path, body in list(package['files'].items()):
+            if path.endswith('.cls'):
+                corrected, count = correct_user_mode_order(body)
+                if count:
+                    package['files'][path] = corrected
+                    if path in package['baseFiles']:
+                        package['baseFiles'][path] = corrected
+                    corrected_paths.append(path)
+        if corrected_paths:
+            package['localChecks']['warnings'].append(
+                'Conservative SOQL access-mode ordering corrected in: ' + ', '.join(corrected_paths)
+                + '. Salesforce check-only compilation is still required.')
 
         package["sourceHash"] = self.fingerprint(package)
 
@@ -1037,6 +1063,8 @@ class DefaultMetadataPipeline(ApexAutomationService):
         for kind in kinds & {'ApexClass','ApexTrigger','Flow','LightningComponentBundle','PermissionSet'}:
             context['existingComponents'][kind]=[r['fullName'] for r in api.list_components(kind)]
         check_planned_components(bundle['plan'],bundle.get('requirement',''),context)
+        from Backend.AI.app.services.formula_policy import validate_picklist_formulas
+        validate_picklist_formulas(bundle['plan'],context,bundle['files'])
 
     def report(self,bundle):
         from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
@@ -1181,6 +1209,27 @@ class DefaultMetadataPipeline(ApexAutomationService):
 
     def deploy(self, bundle, dry_run=True):
         self.verify_package(bundle)
+        if bundle.get('localChecks',{}).get('sourceHash') != bundle['sourceHash']:
+            from Backend.AI.app.services.apex_service import check_saved_apex
+            from Backend.AI.app.services.lwc_apex_contract import check_package_lwc
+            trigger_objects = {item.get('config',{}).get('sobject') for item in bundle['plan']['items'] if item.get('metadataType') == 'ApexTrigger'}
+            try:
+                from Backend.AI.app.services.apex_callout_policy import discover_callout_context
+                apex_context = discover_callout_context({'objects':[{'name':name} for name in trigger_objects if name]},bundle['targetOrg'],bundle['apiVersion'],bundle['requirement']+'\n'+'\n'.join(bundle['files'].values()))
+                check_saved_apex(bundle, apex_context)
+                if any(row['metadataType']=='LightningComponentBundle' for row in bundle['components']):
+                    context = bundle.get('sourceContext')
+                    if context is None:
+                        metadata = self.metadata_factory(bundle['targetOrg'])
+                        context = metadata.get_context(metadata.find_relevant_objects(bundle['requirement']))
+                    check_package_lwc(bundle['files'],bundle['plan'],context,bundle['apiVersion'],self.lwc_service)
+            except ValueError as error:
+                message=str(error)
+                component=next((row['fullName'] for row in bundle['components'] if message.startswith(row['fullName']+':')),None)
+                bundle['localChecks']={'valid':False,'sourceHash':bundle['sourceHash'],'errors':[{'fullName':component,'message':message}],'compilation':'Salesforce compilation has not passed.'}
+                raise
+            bundle['localChecks']={'valid':True,'sourceHash':bundle['sourceHash'],'errors':[],'compilation':'Local checks passed; Salesforce compilation, tests and coverage still required.'}
+
 
         if (
             not bundle.get("layoutReady")
@@ -1204,7 +1253,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
                 label, config = source_config(bundle['files'][component_path('PermissionSet',component['fullName']).as_posix()])
                 preflight_permission_set(component['fullName'], label, config.model_dump(), permission_transport.api if permission_transport else None, bundle['plan'])
 
-        logging.getLogger(__name__).warning('Salesforce operation=%s phase=existence-check seconds=%.3f', 'validate' if dry_run else 'deploy',perf_counter()-phase)
+        log_event(logging.getLogger(__name__), 'salesforce_phase_finished', operation='validate' if dry_run else 'deploy', phase='existence_check', duration_ms=round((perf_counter()-phase)*1000,3))
 
         plan = ImplementationPlan.model_validate(
             bundle["plan"]
@@ -1218,7 +1267,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
         FlowPreflightService(
             bundle["targetOrg"]
         ).validate(plan)
-        logging.getLogger(__name__).warning('Salesforce operation=%s phase=flow-preflight seconds=%.3f', 'validate' if dry_run else 'deploy',perf_counter()-phase)
+        log_event(logging.getLogger(__name__), 'salesforce_phase_finished', operation='validate' if dry_run else 'deploy', phase='flow_preflight', duration_ms=round((perf_counter()-phase)*1000,3))
 
         # Windows CLI processes can retain folder handles briefly.
         # Cleanup must not replace a returned Salesforce result.
@@ -1276,7 +1325,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
                     bundle["layoutSelections"],
                 )
 
-                logging.getLogger(__name__).warning('Salesforce operation=%s phase=layout-review seconds=%.3f', 'validate' if dry_run else 'deploy',perf_counter()-phase)
+                log_event(logging.getLogger(__name__), 'salesforce_phase_finished', operation='validate' if dry_run else 'deploy', phase='layout_review', duration_ms=round((perf_counter()-phase)*1000,3))
                 if refreshed["files"] != bundle["files"]:
                     raise ValueError(
                         "FLS/page layout output changed "
@@ -1312,7 +1361,7 @@ class DefaultMetadataPipeline(ApexAutomationService):
             from Backend.AI.app.services.salesforce_metadata_api import owned_metadata_api
             api=owned_metadata_api(bundle['targetOrg'],bundle['apiVersion'])
             payload = api.deploy(bundle,check_only=dry_run) if api else self.cli(args, root)
-            logging.getLogger(__name__).warning('Salesforce operation=%s phase=submit seconds=%.3f', 'validate' if dry_run else 'deploy',perf_counter()-phase)
+            log_event(logging.getLogger(__name__), 'salesforce_phase_finished', operation='validate' if dry_run else 'deploy', phase='submit', duration_ms=round((perf_counter()-phase)*1000,3))
             details = payload.get('result', {})
             if isinstance(details, dict) and details.get('id') and details.get('done') is None and details.get('status') not in {'Succeeded', 'Failed', 'Canceled'}:
                 details.update(done=False, status='Pending')
