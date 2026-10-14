@@ -95,8 +95,11 @@ def service(tmp_path):
 
 def generate(service, plan=PLAN):
     provider = Mock()
+    # Allow the generator's initial attempt and two repair attempts.
     provider.generate.side_effect = [
         json.dumps(plan),
+        json.dumps(SOURCE),
+        json.dumps(SOURCE),
         json.dumps(SOURCE),
     ]
 
