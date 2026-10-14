@@ -1,0 +1,211 @@
+{
+  "schemaVersion": 1,
+  "mode": "replay",
+  "corpusHash": "2fb8947082a8843247356bd534cd41428e9141d8540a9ef4a1d24ade0e34b0d5",
+  "contextVersion": "synthetic-org-v1",
+  "model": "golden-replay",
+  "passed": 15,
+  "total": 15,
+  "cases": [
+    {
+      "caseId": "existing-object",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.001,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-field",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-flow",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-apex-class",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-apex-trigger",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-lwc",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "existing-rule",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "clarification",
+      "seconds": 0.0,
+      "plannerCalls": 0,
+      "promptHashes": [],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "new-object",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "plan",
+      "seconds": 0.032,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "a19705364feba9f0f46a4ed6084aa39b404e27a627afb13a58e5547784da909d"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "new-field-specific-parent",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "plan",
+      "seconds": 0.001,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "b6748d54bfc685c4410ba3f0dab1f0c654b86d5067d95b5085d81033f7d547cb"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "picklist-default",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "plan",
+      "seconds": 0.001,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "f8d1cb3b3c878330df18e4a9f48b18eaabf084af78eaa121f53b40d41af9d070"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "leave-number-stays-number",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "plan",
+      "seconds": 0.02,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "24f771be5209fe7fb6da884d91be929d3a8c52f98185bebd7fc2773cd156999d"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "new-apex-class",
+      "category": "behavior",
+      "passed": true,
+      "outcome": "plan",
+      "seconds": 0.001,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "3fcd3b4836750b8275cb074c3a828768e70f2c97e4db19df91810434e8072299"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": null
+    },
+    {
+      "caseId": "unsafe-name",
+      "category": "adversarial",
+      "passed": true,
+      "outcome": "rejected",
+      "seconds": 0.001,
+      "plannerCalls": 1,
+      "promptHashes": [
+        "484e6b22f27d8ebc6299df1d496ffccc51984f7a6751bcd71a41d2a332671f8f"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": "AI generated an invalid Salesforce plan: ITEM-001: Invalid CustomObject fullName: '../Escape__c'"
+    },
+    {
+      "caseId": "dangling-flow",
+      "category": "adversarial",
+      "passed": true,
+      "outcome": "rejected",
+      "seconds": 0.017,
+      "plannerCalls": 2,
+      "promptHashes": [
+        "b9efc39641e6e43278d167d8f094a1dc5d7cdcc762d05da49ac2b3fde36d1bcf",
+        "46cd7ae12989df28f5661abd3f19501d304993f981793dc55600be13cc66f063"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": "AI generated an invalid Salesforce plan: ITEM-001: Invalid Flow configuration: 1 validation error for ExtendedFlowConfig\n  Dangling Flow connector or unknown start: startElement (source 'Start') targets missing element 'Check_Dates_For_Calculation'. Available elements: Calculate_Days_Assignment [type=flow_graph_reference, input_value={'contractVersion': 2, 'f...e': 2}], 'formulas': []}, input_type=dict]"
+    },
+    {
+      "caseId": "missing-formula-source",
+      "category": "adversarial",
+      "passed": true,
+      "outcome": "rejected",
+      "seconds": 0.018,
+      "plannerCalls": 2,
+      "promptHashes": [
+        "b9efc39641e6e43278d167d8f094a1dc5d7cdcc762d05da49ac2b3fde36d1bcf",
+        "2699364cac465d9c1bca041c18caa18f7e6987612f31e15e679605c008d335ef"
+      ],
+      "usage": [],
+      "costUsd": null,
+      "error": "Formula resource source must be an existing calculated field: Missing_Field__c."
+    }
+  ],
+  "liveSalesforceValidation": "not run",
+  "userAcceptance": "not measured by fixtures"
+}
