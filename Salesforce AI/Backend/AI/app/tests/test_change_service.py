@@ -542,8 +542,8 @@ def test_default_salesforce_context():
     )
 
     assert (
-        '"objects": []'
-        in provider.user_prompt
+        '"objects":[]'
+        in provider.user_prompt.replace(" ", "")
     )
 
 

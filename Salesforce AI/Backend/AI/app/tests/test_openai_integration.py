@@ -1,3 +1,6 @@
+import os
+import pytest
+pytestmark = pytest.mark.skipif(os.getenv('RUN_LIVE_AI_TESTS') != 'true' or not os.getenv('ANTHROPIC_API_KEY'), reason='Requires explicit live-AI opt-in and provider credentials')
 from dotenv import load_dotenv
 
 from Backend.AI.app.providers.ai_provider import (

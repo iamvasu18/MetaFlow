@@ -4,7 +4,42 @@ from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient as RawTestClient
+from uuid import uuid4
+
+
+@pytest.fixture(autouse=True)
+def authenticated_owner(monkeypatch):
+    from Backend.AI.app import account_api as accounts
+    monkeypatch.setenv("APP_PUBLIC_URL", "http://testserver")
+    # This module exercises the mocked CLI adapter; owned API transport is
+    # independently covered in test_metadata_api_transport.
+    monkeypatch.setattr("Backend.AI.app.services.salesforce_metadata_api.owned_metadata_api", lambda *args: None)
+    owner = "test-" + uuid4().hex
+    with accounts.db() as db:
+        db.execute("INSERT INTO users VALUES(?,?,?,?,?)", (owner, owner+"@test", "Test", "salt", "hash"))
+        db.execute("INSERT INTO sessions VALUES(?,?,?)", (accounts.digest(owner), owner, accounts.time.time()+1000))
+        db.execute("INSERT INTO orgs VALUES(?,?,?,?,?,?)", ("AIOrg", owner, "Test org", "Sandbox", "test@org", "https://example.salesforce.com"))
+    account_token = accounts.current_account.set(owner)
+    org_token = accounts.current_org.set("AIOrg")
+    try:
+        yield
+    finally:
+        accounts.current_account.reset(account_token)
+        accounts.current_org.reset(org_token)
+        with accounts.db() as db:
+            db.execute("DELETE FROM orgs WHERE user_id=?", (owner,))
+
+
+def TestClient(app):
+    from Backend.AI.app import main, account_api as accounts
+    owner = accounts.current_account.get()
+    with accounts.db() as db:
+        for plan in main.plan_store._plans.values():
+            db.execute("INSERT OR REPLACE INTO plans VALUES(?,?,?)", (plan.id, owner, "AIOrg"))
+    client = RawTestClient(app)
+    client.cookies.set("app_session", owner)
+    return client
 
 from Backend.AI.app.services.metadata_service import (
     DefaultMetadataPipeline as ImplementationService,
@@ -42,6 +77,7 @@ def service(tmp_path):
     )
 
     metadata = Mock()
+    metadata.list_objects.return_value = [{"name": "Contact", "label": "Contact"}]
     metadata.find_relevant_objects.return_value = ["Contact"]
     metadata.get_context.return_value = deepcopy(CONTEXT)
     metadata.get_flow_dependency_context.return_value = {}
@@ -65,7 +101,7 @@ def generate(service, plan=PLAN):
     ]
 
     package = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement="Build a Contact search Apex service"
         ),
         provider,
@@ -93,7 +129,8 @@ def test_general_requirement_plans_then_generates_without_user_approval(
     first = provider.generate.call_args_list[0].kwargs
     assert "VERIFIED_DEFAULT_CONTEXT" in first["user_prompt"]
     assert "default workflow" in first["system_prompt"]
-    assert service.cli.call_count == 4
+    assert service.cli.call_count == 1
+    assert "ApexClass" in service.cli.call_args.args[0]
 
 
 def test_lwc_selected_by_existing_planner(service):
@@ -120,7 +157,7 @@ def test_lwc_selected_by_existing_planner(service):
     provider.generate.return_value = json.dumps(plan)
 
     result = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement="Show a Contact search UI"
         ),
         provider,
@@ -244,7 +281,7 @@ def test_default_flow_generation_uses_existing_validated_flow_contract(
     provider.generate.return_value = json.dumps(plan_data("DRAFT"))
 
     package = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement=(
                 "Default blank Account descriptions with a before-save flow"
             )
@@ -281,7 +318,7 @@ def test_invalid_scope_does_not_call_ai(service):
 
     with pytest.raises(RuntimeError):
         service.generate(
-            ImplementationRequest(requirement="Build UI"),
+            ImplementationRequest(target_org="AIOrg", requirement="Build UI"),
             provider,
         )
 
@@ -339,7 +376,7 @@ def test_metadata_preview_generates_xml_without_persisting_user_approval(
     provider.generate.return_value = json.dumps(plan)
 
     package = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement="Create a Review Note text field on Contact"
         ),
         provider,
@@ -386,12 +423,13 @@ def test_existing_endpoints_approve_validate_and_deploy(
     store.save(plan)
 
     package = service.prepare_review(package, plan, {})
+    package.update(state="validated", validatedHash=package["sourceHash"])
     packages.save_package(package)
 
     client = TestClient(main.app)
     path = "/api/plans/" + plan.id
 
-    assert client.post(path + "/deploy").status_code == 422
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 422
 
     assert client.post(
         path + "/approve",
@@ -403,13 +441,15 @@ def test_existing_endpoints_approve_validate_and_deploy(
         json={"source_hash": package["sourceHash"]},
     ).status_code == 200
 
-    service.deploy = Mock(side_effect=[success(), success()])
-    response = client.post(path + "/deploy")
+    report = success()
+    report["result"]["checkOnly"] = False
+    service.deploy = Mock(return_value=report)
+    response = client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]})
 
     assert response.status_code == 200
     assert response.json()["state"] == "deployed"
-    assert service.deploy.call_count == 2
-    assert client.post(path + "/deploy").status_code == 409
+    assert service.deploy.call_count == 1
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 409
     assert client.get(path).json()["approvedHash"] == package["sourceHash"]
 
 
@@ -465,7 +505,7 @@ def test_fls_and_layout_files_are_reviewed_before_approval(
         specification,
     )
 
-    def retrieve(self, root):
+    def retrieve(self, root, objects=None):
         layout = new_layout(ET.Element(Q("CustomObject")))
         write_xml(
             layout,
@@ -490,7 +530,7 @@ def test_fls_and_layout_files_are_reviewed_before_approval(
     provider.generate.return_value = json.dumps(plan)
 
     package = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement="Create Contact Review Note"
         ),
         provider,
@@ -582,6 +622,7 @@ def default_api(tmp_path, service, monkeypatch):
     store.save(plan)
 
     package = service.prepare_review(package, plan, {})
+    package.update(state="validated", validatedHash=package["sourceHash"])
     packages.save_package(package)
 
     client = TestClient(main.app)
@@ -596,18 +637,28 @@ def default_api(tmp_path, service, monkeypatch):
 
 
 def test_failed_default_validation_never_deploys(default_api, service):
-    client, path, _, _ = default_api
+    client, path, packages, plan = default_api
+    bundle=packages.get_package(plan.id)
+    bundle.update(state="generated", validatedHash=None, approvedHash=None)
+    packages.save_package(bundle)
+    plan.status="DRAFT"
+    for item in plan.items: item.approval="PENDING"
 
     service.deploy = Mock(
         return_value={"result": {"success": False, "done": True}}
     )
 
-    assert client.post(path + "/deploy").json()["state"] == "failed"
+    assert client.post(path + "/validate", json={"source_hash": client.get(path).json()["sourceHash"]}).json()["state"] == "failed"
     assert service.deploy.call_count == 1
 
 
 def test_pending_default_validation_never_deploys(default_api, service):
-    client, path, _, _ = default_api
+    client, path, packages, plan = default_api
+    bundle=packages.get_package(plan.id)
+    bundle.update(state="generated", validatedHash=None, approvedHash=None)
+    packages.save_package(bundle)
+    plan.status="DRAFT"
+    for item in plan.items: item.approval="PENDING"
 
     service.deploy = Mock(
         return_value={
@@ -619,9 +670,9 @@ def test_pending_default_validation_never_deploys(default_api, service):
         }
     )
 
-    assert client.post(path + "/deploy").json()["state"] == "pending"
+    assert client.post(path + "/validate", json={"source_hash": client.get(path).json()["sourceHash"]}).json()["state"] == "pending"
     assert service.deploy.call_count == 1
-    assert client.post(path + "/deploy").status_code == 409
+    assert client.post(path + "/validate", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 409
 
 
 def test_missing_apex_test_execution_blocks_real_deploy(
@@ -634,7 +685,7 @@ def test_missing_apex_test_execution_blocks_real_deploy(
         return_value={"result": {"success": True, "done": True}}
     )
 
-    assert client.post(path + "/deploy").status_code == 422
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).json()["state"] == "unknown"
     assert service.deploy.call_count == 1
 
 
@@ -642,12 +693,12 @@ def test_unknown_real_deploy_blocks_retry(default_api, service):
     client, path, _, _ = default_api
 
     service.deploy = Mock(
-        side_effect=[success(), RuntimeError("Lost response")]
+        side_effect=RuntimeError("Lost response")
     )
 
-    assert client.post(path + "/deploy").status_code == 502
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 502
     assert client.get(path).json()["state"] == "unknown"
-    assert client.post(path + "/deploy").status_code == 409
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 409
 
 
 def test_default_general_input_saves_into_existing_plan_store(
@@ -696,7 +747,7 @@ def test_approval_rejects_changed_plan(default_api):
     client, path, _, plan = default_api
     plan.summary = "Changed after approval"
 
-    assert client.post(path + "/deploy").status_code == 422
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 422
 
 
 def test_default_lwc_generation_runs_existing_real_compiler(service):
@@ -740,7 +791,7 @@ def test_default_lwc_generation_runs_existing_real_compiler(service):
     ]
 
     package = service.generate(
-        ImplementationRequest(
+        ImplementationRequest(target_org="AIOrg",
             requirement="Search Account records on an App Page"
         ),
         provider,
@@ -770,8 +821,8 @@ def test_incomplete_real_deploy_response_blocks_retry(
         ]
     )
 
-    response = client.post(path + "/deploy")
+    response = client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]})
 
     assert response.status_code == 200
     assert response.json()["state"] == "unknown"
-    assert client.post(path + "/deploy").status_code == 409
+    assert client.post(path + "/deploy", json={"source_hash": client.get(path).json()["sourceHash"]}).status_code == 409

@@ -503,6 +503,7 @@ This prompt must NOT:
      "deployment": null
      }
      Do not invent a validation formula or referenced field.
+     For verified single picklists use ISPICKVAL/CASE/TEXT; never compare the picklist directly to a string. For multi-select values use INCLUDES.
      If the formula depends on fields being created in the same plan, add those item IDs as dependencies.
      FLOW PLANNING
      Use the INTEGRATED FLOW CONTRACT and runtime schema supplied below.
@@ -535,7 +536,7 @@ This prompt must NOT:
      Do not generate Apex source code during planning.
      Do not invent classes, interfaces, SOQL, callouts, or business logic not required by the requirement.
      When the requirement clearly needs a test class, represent it as a separate ApexClass item with apexKind = "Test" and a dependency on the implementation being tested.
-     Because Apex code generation is not currently executable, add an item-level warning unless that runtime capability has subsequently been enabled.
+     Apex generation is enabled. Include coordinated Test classes for every production Apex package. Salesforce compilation, test execution and coverage validation are mandatory; generation alone is not validation. For @future use a Standard or Service class with static void primitive-parameter methods; prefer Queueable for new async work unless @future is explicitly required.
      APEX TRIGGER PLANNING
      Triggers use:
      "metadataType": "ApexTrigger"
@@ -581,7 +582,7 @@ This prompt must NOT:
      }
      Do not generate HTML, JavaScript, CSS, or XML source during planning.
      If the LWC requires an Apex controller that is also being created, represent the controller as a separate ApexClass item and add that item ID as a dependency.
-     Because LWC generation is not currently executable, add an item-level warning unless that runtime capability has subsequently been enabled.
+     LWC generation is enabled. Choose LDS/UI API for supported standard data access; choose LWC plus Apex Controller and Test classes for custom queries, aggregation, complex logic, or an explicit Apex requirement. Declare the controller dependency ID. Preserve the chosen behavior; do not silently replace Apex with LDS.
      APPLICATION / UI / SECURITY PLANNING
      When explicitly requested, represent these Salesforce components using their canonical metadata types:
    - RecordType
@@ -804,8 +805,8 @@ This prompt must NOT:
 INTEGRATED FLOW CONTRACT
 Use metadataType Flow, a nonempty label, and an unnamespaced fullName with letters,
 digits and single underscores only; no double/trailing underscores or extension.
-Objects and fields referenced by a Flow must already exist in Salesforce context.
-New-object/field plus Flow creation in the same plan is not supported by discovery.
+Flow references must resolve against verified Salesforce context or explicitly declared same-plan CREATE objects/fields after dependency validation.
+For same-plan references, declare dependencies using plan item IDs. The backend projects validated planned metadata into context, checks types, and orders the package. Do not invent fields or claim that projected metadata already exists in the org.
 The complete Flow config is approved with the plan. Metadata conversion must copy
 fullName, label, description, dependencies and config exactly; never rewrite an
 approved graph. Report unsupported requirements using existing validation issue

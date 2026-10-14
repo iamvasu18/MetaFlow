@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ValidationRule xmlns="http://soap.sforce.com/2006/04/metadata">
+    <fullName>Validate_Phone_Format</fullName>
+    <active>true</active>
+    <description>Validation rule to ensure Phone Number field starts with +91 and contains exactly 10 digits after the country code</description>
+    <errorConditionFormula><![CDATA[AND(NOT(ISBLANK(Phone_Number__c)), NOT(REGEX(Phone_Number__c, "^[+]91[0-9]{10}$")))]]></errorConditionFormula>
+    <errorDisplayField>Phone_Number__c</errorDisplayField>
+    <errorMessage>Phone number must start with +91 followed by exactly 10 digits (e.g., +911234567890)</errorMessage>
+</ValidationRule>

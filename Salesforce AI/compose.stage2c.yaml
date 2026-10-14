@@ -6,7 +6,7 @@ services:
       POSTGRES_DB: metaflow
       POSTGRES_PASSWORD: ${METAFLOW_POSTGRES_PASSWORD:?Set METAFLOW_POSTGRES_PASSWORD in .env}
     ports:
-      - "127.0.0.1:55432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - metaflow_postgres:/var/lib/postgresql/data
     healthcheck:

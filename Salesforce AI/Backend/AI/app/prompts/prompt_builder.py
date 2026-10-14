@@ -1,3 +1,4 @@
+from Backend.AI.app.prompts.implementation_rules import select_rules
 from pathlib import Path
 import json
 import re
@@ -316,9 +317,23 @@ def build_planning_prompt(
 
     common_rules = load_common_rules()
 
-    planning_template = (
-        load_planning_prompt()
-    )
+    planning_template = load_planning_prompt()
+    # The integrated Flow contract is long and exclusively describes Flow
+    # metadata. Do not send it for explicitly code/UI-only requests: it adds
+    # input tokens, latency and distracting unrelated generation instructions.
+    # Keep it for all Flow and ambiguous automation requests.
+    explicit_flow_intent = bool(re.search(
+        r"\b(flow|record.triggered|autolaunched|flow builder|screen flow)\b",
+        requirement, re.I,
+    ))
+    explicit_code_intent = bool(re.search(
+        r"\b(lwc|lightning web component|apex|queueable|batchable)\b",
+        requirement, re.I,
+    ))
+    if explicit_code_intent and not explicit_flow_intent:
+        flow_appendix = "\nINTEGRATED FLOW CONTRACT\n"
+        if flow_appendix in planning_template:
+            planning_template = planning_template.split(flow_appendix, 1)[0]
 
     # -----------------------------------------------------
     # 3. Serialize dynamic inputs
@@ -489,15 +504,34 @@ def build_planning_prompt(
 {CUSTOM_OBJECT_POLICY_PROMPT}
 """.strip()
 
-    if True:  # Method selection may choose Flow even when the user never names it.
+    final_prompt += ("\n\nSECURITY / PERMISSION SET RULE: Do not introduce PermissionSet "
+                     "items or grant object, field, class, or system permissions unless "
+                     "the requirement expressly asks for access or permission changes. "
+                     "An Apex/LWC/Flow implementation alone does not imply creating a "
+                     "Permission Set. For explicit PermissionSet objectPermissions use "
+                     "allowEdit (never allowUpdate); follow the provided schema.")
+
+    explicit_nonflow = re.search(r"\b(apex|lwc|lightning web component|objects?|fields?|permission[- ]?sets?|validation rules?)\b", requirement, re.I)
+    automation = re.search(r"\b(flow|automatically|automation|when|whenever|scheduled|screen)\b", requirement, re.I)
+    # Explicit UI/code requests must not become Flow generation solely because
+    # they contain natural-language words such as "when" or "screen".
+    explicit_flow = re.search(r"\b(flow|record.triggered|autolaunched|flow builder)\b", requirement, re.I)
+    explicit_ui_or_apex = re.search(r"\b(lwc|lightning web component|apex|queueable|batchable)\b", requirement, re.I)
+    include_flow_contract = bool(explicit_flow or ((automation or not explicit_nonflow) and not explicit_ui_or_apex))
+    if include_flow_contract:
         from Backend.AI.app.validators.flow_validator import flow_config_json_schema
         final_prompt += "\n\n" + FLOW_RESOURCE_NAMING_RULES + "\nChoose the implementation method from the requirement and verified context. For same-record updates prefer before-save record-triggered Flow with an Assignment and no extra Update Records operation. Use RecordTriggered (not RecordTriggeredFlow), supply required labels/status, use assignments/next/field/value keys from the schema, and end branches with null. Do not introduce a Decision-Assignment cycle. Respect explicit user technology choices or report a limitation."
         final_prompt += "\n\n<FLOW_CONFIG_SCHEMA>\n" + json.dumps(flow_config_json_schema(), separators=(",", ":")) + "\n</FLOW_CONFIG_SCHEMA>"
 
+    if re.search(r"\bautolaunched\b", requirement, re.I):
+        final_prompt += "\n\nAUTOLAUNCHED RECORD-ID RESOURCE RULES\nRecord identifiers need dataType String with verified referenceTo, matching the Flow configuration contract. Use IsNull for presence checks. Never compare an Id to an empty String. Do not infer an object type for an untyped String identifier."
+
     if re.search(r"\bpermission[- ]?sets?\b", requirement, re.I):
         from Backend.AI.app.services.permission_set_service import PermissionSetConfig
         final_prompt += "\n\nPermissionSet supports CREATE only. Use exact verified object/field/class API names and minimal explicitly requested grants. Label is required. Do not create or edit Profiles to satisfy this request. PermissionSet XML does not assign users. Declare item dependencies for same-plan new references. Use this exact config schema: " + json.dumps(PermissionSetConfig.model_json_schema())
-    final_prompt += "\n\n" + VALIDATION_RULE_FORMULA_RULES
+    if re.search(r"\b(validation rule|validation rules|formula|regex)\b", requirement, re.I):
+        final_prompt += "\n\n" + VALIDATION_RULE_FORMULA_RULES
+    final_prompt += "\n\n" + select_rules(requirement)
     return final_prompt
 
 
@@ -625,6 +659,7 @@ def build_metadata_prompt(
         final_prompt += "\n\n<FLOW_CONFIG_SCHEMA>\n" + json.dumps(flow_config_json_schema(), separators=(",", ":")) + "\n</FLOW_CONFIG_SCHEMA>"
 
     final_prompt += "\n\n" + VALIDATION_RULE_FORMULA_RULES
+    final_prompt += "\n\n" + select_rules(implementation_plan.get("summary", ""), components=implementation_plan.get("items", []), phase="metadata")
     return final_prompt
 
 
@@ -778,4 +813,5 @@ def build_change_prompt(
 {change_prompt}
 """.strip()
 
+    final_prompt += "\n\n" + select_rules(implementation_plan.get("summary", ""), components=implementation_plan.get("items", []), phase="change")
     return final_prompt

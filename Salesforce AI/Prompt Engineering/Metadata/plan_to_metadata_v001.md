@@ -805,8 +805,8 @@ Use Salesforce context only to:
       INTEGRATED FLOW CONTRACT
       Use metadataType Flow, a nonempty label, and an unnamespaced fullName with letters,
       digits and single underscores only; no double/trailing underscores or extension.
-      Objects and fields referenced by a Flow must already exist in Salesforce context.
-      New-object/field plus Flow creation in the same plan is not supported by discovery.
+      Flow references must resolve against verified Salesforce context or explicitly declared same-plan CREATE objects/fields after dependency validation.
+      For same-plan references, declare dependencies using plan item IDs. The backend projects validated planned metadata into context, checks types, and orders the package. Do not invent fields or claim that projected metadata already exists in the org.
       The complete Flow config is approved with the plan. Metadata conversion must copy
       fullName, label, description, dependencies and config exactly; never rewrite an
       approved graph. Report unsupported requirements using existing validation issue

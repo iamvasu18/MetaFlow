@@ -166,4 +166,5 @@ def test_permission_request_does_not_confuse_existing_field_or_class_with_new_pe
         dict(action='build',requirement=request,create_new=True,requested_type='PermissionSet')])
     result=respond(turn(request),p,lambda:Api())
     assert result['action']=='build'
-    assert 'ApiEnabled' in p.calls[1]['user_prompt']
+    # Complete builds are verified via org reads, not reclassified a second time.
+    assert len(p.calls) == 1

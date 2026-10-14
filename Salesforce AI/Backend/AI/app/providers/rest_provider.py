@@ -1,3 +1,4 @@
+from Backend.AI.app.services.observability import timed_ai_call
 """Text generation via fixed official endpoints. No browser keys or auto retries."""
 import os
 import re
@@ -36,6 +37,7 @@ class RestProvider(AIProvider):
         if not isinstance(result,dict):raise RuntimeError('AI provider returned invalid data.')
         return result
 
+    @timed_ai_call
     def generate(self,system_prompt,user_prompt):
         if self.provider_name=='openai':
             payload=dict(model=self.model,instructions=system_prompt,input=user_prompt)

@@ -1,0 +1,157 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Salesforce AI Implementation Plan",
+  "type": "object",
+  "required": [
+    "id",
+    "requirementId",
+    "summary",
+    "assumptions",
+    "items",
+    "status"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "requirementId": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "string"
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/planItem"
+      }
+    },
+    "storyPoints": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "status": {
+      "const": "DRAFT",
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "planItem": {
+      "type": "object",
+      "required": [
+        "id",
+        "action",
+        "metadataType",
+        "fullName",
+        "dependencies",
+        "approval",
+        "validation",
+        "deployment"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string",
+          "enum": [
+            "CREATE",
+            "UPDATE",
+            "DELETE",
+            "NO_CHANGE"
+          ]
+        },
+        "metadataType": {
+          "type": "string"
+        },
+        "fullName": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source": {},
+        "target": {},
+        "config": {},
+        "validation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "valid",
+            "errors",
+            "warnings"
+          ],
+          "properties": {
+            "valid": {
+              "type": "boolean"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "approval": {
+          "const": "PENDING",
+          "type": "string"
+        },
+        "deployment": {
+          "type": "null"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "metadataType": {
+                "const": "Flow"
+              },
+              "action": {
+                "const": "CREATE"
+              }
+            },
+            "required": [
+              "metadataType",
+              "action"
+            ]
+          },
+          "then": {
+            "required": [
+              "label",
+              "config"
+            ],
+            "properties": {
+              "config": {
+                "$ref": "flow-config-v001.json"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "description": "Initial AI-generated draft contract. Persisted lifecycle states are managed by the backend, never by this model output."
+}

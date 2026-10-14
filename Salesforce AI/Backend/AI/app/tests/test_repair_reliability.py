@@ -59,3 +59,55 @@ def test_out_of_scope_files_are_never_accepted():
         repair_sources(original, 'example', '', provider)
     assert provider.calls == 3
     assert original == before
+
+
+def test_flow_repair_can_add_missing_record_resource_without_changing_existing_contract():
+    from Backend.AI.app.services.plan_revision_service import RepairProvider
+    original={'flowType':'Autolaunched','status':'Draft','startElement':'Get_Queue',
+        'variables':[], 'elements':[{'kind':'GetRecords','name':'Get_Queue','object':'Group','next':None}]}
+    candidate={'id':'PLAN-ONE','items':[{'id':'ITEM-ONE','action':'CREATE','metadataType':'Flow',
+        'fullName':'Escalate','config':original}]}
+    config=deepcopy(original)
+    config['variables']=[{'name':'QueueRecord','dataType':'SObject','objectType':'Group'}]
+    class Provider:
+        def generate(self, **kwargs):
+            return json.dumps({'repairs':[{'itemId':'ITEM-ONE','config':config}]})
+    adapter=RepairProvider(Provider(),{'rejectedPlan':candidate,'originalRequirement':'Find the queue.',
+        'failureEvidence':'ITEM-ONE: Unknown Flow resource QueueRecord.Id'})
+    result=json.loads(adapter.generate('planning','verified context'))
+    assert result['items'][0]['config']['variables'][0]['objectType']=='Group'
+    assert candidate['items'][0]['config']['variables']==[]
+
+
+def test_flow_repair_cannot_delete_or_retype_existing_input():
+    from Backend.AI.app.services.plan_revision_service import RepairProvider
+    original={'flowType':'Autolaunched','variables':[{'name':'recordId','dataType':'String','isInput':True}],
+        'elements':[]}
+    candidate={'items':[{'id':'ITEM-ONE','action':'CREATE','metadataType':'Flow','fullName':'Example','config':original}]}
+    config=deepcopy(original);config['variables']=[]
+    class Provider:
+        def generate(self, **kwargs):
+            return json.dumps({'repairs':[{'itemId':'ITEM-ONE','config':config}]})
+    adapter=RepairProvider(Provider(),{'rejectedPlan':candidate,'originalRequirement':'Keep input.',
+        'failureEvidence':'ITEM-ONE error'})
+    with pytest.raises(ValueError,match='existing Flow variables'):
+        adapter.generate('planning','context')
+
+
+@pytest.mark.parametrize('mutation',['object','assignment'])
+def test_flow_repair_cannot_silently_drop_requested_write(mutation):
+    from Backend.AI.app.services.plan_revision_service import RepairProvider
+    original={'startElement':'Create_Task','variables':[],'elements':[{'kind':'CreateRecords',
+        'name':'Create_Task','object':'Task','inputAssignments':[{'field':'Subject','value':{'type':'String','value':'Follow up'}}]}]}
+    candidate={'items':[{'id':'ITEM-ONE','action':'CREATE','metadataType':'Flow','fullName':'Example','config':original}]}
+    config=deepcopy(original)
+    if mutation=='object':config['elements'][0]['object']='Account'
+    else:config['elements'][0]['inputAssignments']=[]
+    class Provider:
+        def generate(self, **kwargs):
+            return json.dumps({'repairs':[{'itemId':'ITEM-ONE','config':config}]})
+    adapter=RepairProvider(Provider(),{'rejectedPlan':candidate,'originalRequirement':'Create follow up Task.',
+        'failureEvidence':'ITEM-ONE error'})
+    with pytest.raises(ValueError,match='Repair cannot'):
+        adapter.generate('planning','context')
+    assert candidate['items'][0]['config']==original

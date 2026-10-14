@@ -33,7 +33,8 @@ def test_focused_discovery_skips_describes_rules_and_all_inventory(tmp_path):
     with patch.object(pipeline,'version',return_value='65.0'),patch.object(pipeline,'cli',return_value={'result':{'records':[],'done':True}}) as cli:
         _,context=pipeline.discover(DefaultGenerationRequest(requirement='Create an object API testing',target_org='org'))
     assert context['focusedObjectRequest']['fullName']=='API_Testing__c'
-    cli.assert_called_once();metadata.find_relevant_objects.assert_not_called();metadata.get_context.assert_not_called()
+    assert cli.call_count == 2  # Verify both the standard and proposed custom API names.
+    metadata.find_relevant_objects.assert_not_called();metadata.get_context.assert_not_called()
 
 
 def test_new_object_layout_options_never_retrieve_org(tmp_path):

@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from unittest.mock import patch
 
 from Backend.AI.app.services.deployment_executor import (
@@ -73,7 +75,7 @@ def test_successful_deployment(
 
     mock_run.return_value.returncode = 0
     mock_run.return_value.stdout = (
-        "Deployment succeeded"
+        json.dumps({"status": 0, "result": {"success": True, "done": True, "checkOnly": False}})
     )
     mock_run.return_value.stderr = ""
 
@@ -93,7 +95,7 @@ def test_successful_deployment(
     assert result["targetOrg"] == "AIOrg"
 
     assert result["stdout"] == (
-        "Deployment succeeded"
+        json.dumps({"status": 0, "result": {"success": True, "done": True, "checkOnly": False}})
     )
 
     mock_run.assert_called_once()
@@ -111,8 +113,7 @@ def test_successful_deployment(
         "AIOrg",
         "--source-dir",
         (
-            "force-app\\main\\default\\objects\\"
-            "TrainingSession__c"
+            str(executor.project_root / "force-app/main/default/objects/TrainingSession__c")
         ),
         "--wait",
         "30",
@@ -172,8 +173,7 @@ def test_failed_deployment(
         "AIOrg",
         "--source-dir",
         (
-            "force-app\\main\\default\\objects\\"
-            "TrainingSession__c"
+            str(executor.project_root / "force-app/main/default/objects/TrainingSession__c")
         ),
         "--wait",
         "30",

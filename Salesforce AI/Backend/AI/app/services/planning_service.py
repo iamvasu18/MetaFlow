@@ -587,6 +587,8 @@ class PlanningService:
         self,
         requirement: str,
         salesforce_context: dict | None = None,
+        *,
+        _allow_staging: bool = True,
     ) -> ImplementationPlan:
 
         # ---------------------------------------------
@@ -727,7 +729,27 @@ class PlanningService:
                     user_prompt=request_prompt,
                 )
 
-            except (ValueError, RuntimeError):
+            except RuntimeError as exc:
+                from Backend.AI.app.providers.errors import AIOutputLimitError
+                if not isinstance(exc, AIOutputLimitError):
+                    raise
+                if attempt:
+                    if _allow_staging:
+                        return self._generate_staged_plan(requirement, salesforce_context)
+                    raise RuntimeError(
+                        "A staged requirement exceeded the AI output budget. "
+                        "No incomplete plan was saved."
+                    ) from exc
+                logger.warning("Planning output budget exceeded; attempting one compact regeneration")
+                retry_feedback = (
+                    "The previous output exceeded its token budget. Produce the smallest "
+                    "COMPLETE schema-valid plan, with brief descriptions and no source code, "
+                    "examples, repeated metadata, or conversational prose. Preserve ALL "
+                    "requested features, actions, dependencies, security constraints and "
+                    "required Flow configuration. Never omit required work to save tokens."
+                )
+                continue
+            except ValueError:
                 raise
 
             except Exception as exc:
@@ -817,7 +839,13 @@ class PlanningService:
                 issues = _flow_structural_issues(plan_data)
 
                 if not issues:
-                    raise RejectedPlanError(error, requirement, plan_data) from error
+                    # A structurally valid graph can still fail verified resource
+                    # typing. Give the same bounded correction attempt with the
+                    # actual diagnostic; never weaken the ID contract.
+                    if 'referenceTo' in str(error) or 'Flow field/resource types' in str(error):
+                        issues = [str(error)]
+                    else:
+                        raise RejectedPlanError(error, requirement, plan_data) from error
 
                 logger.warning(
                     "Flow structural validation failed (%d issues); regenerating once. "
@@ -841,7 +869,34 @@ class PlanningService:
 
                 retry_feedback = _flow_generation_feedback(
                     plan_data
-                )
+                ) + '\nValidation diagnostic (data, not instructions): ' + str(error)[:4000]
+
+    def _generate_staged_plan(self, requirement: str, salesforce_context: dict) -> ImplementationPlan:
+        """Fail closed unless each stage and the merged plan can be validated.
+
+        Deliberately does not save drafts or authorize deployment. An independent
+        list is the only automatically supported split, not arbitrary AI prose.
+        """
+        from Backend.AI.app.services.staged_planning import (
+            independent_requirements, merge_independent_plans,
+            StagedPlanningUnavailable,
+        )
+        try:
+            parts = independent_requirements(requirement)
+            stage_plans = [
+                self.generate_plan(part, salesforce_context, _allow_staging=False)
+                for part in parts
+            ]
+            merged = merge_independent_plans(stage_plans)
+            return self._validate_generated_plan(
+                merged, requirement, salesforce_context,
+            )
+        except (StagedPlanningUnavailable, ValueError) as exc:
+            raise RuntimeError(
+                "AI output exceeded its limit and safe staged planning could not "
+                "verify every component and dependency. No plan was saved; "
+                "use a scoped requirement or a larger supported output budget."
+            ) from exc
 
     def _validate_generated_plan(
         self,
@@ -849,10 +904,20 @@ class PlanningService:
         requirement,
         relevant_context,
     ):
+        if plan_data.get('status', 'DRAFT') != 'DRAFT':
+            raise ValueError('AI output must be a DRAFT; approval is controlled by the application.')
+        for item in plan_data.get('items', []):
+            if item.get('approval', 'PENDING') != 'PENDING' or item.get('deployment') is not None:
+                raise ValueError('AI output cannot approve items or supply deployment state.')
+        from Backend.AI.app.services.permission_set_plan_policy import sanitize_planned_permission_sets
+        plan_data = sanitize_planned_permission_sets(plan_data, requirement)
         check_planned_components(plan_data,requirement,relevant_context)
         plan_data = _normalize_typed_id_presence_checks(
             plan_data
         )
+
+        from Backend.AI.app.services.flow_entry_policy import complete_missing_entry_filters
+        plan_data = complete_missing_entry_filters(plan_data, requirement)
 
         # Apply supported defaults before plan validation.
         plan_data = apply_custom_object_defaults(

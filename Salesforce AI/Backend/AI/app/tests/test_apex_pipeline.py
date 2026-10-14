@@ -98,6 +98,7 @@ def test_apex_generator_creates_class_and_meta(tmp_path: Path):
     (tmp_path / "sfdx-project.json").write_text('{"sourceApiVersion":"67.0"}', encoding="utf-8")
     raw = class_item("public with sharing class AccountService { public static void run() {} }")
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     item = type("Item", (), raw)()
     item.metadataType = "ApexClass"
     path = generate_apex(item, tmp_path)
@@ -113,6 +114,7 @@ def test_apex_generator_creates_trigger_and_meta(tmp_path: Path):
     body = "trigger AccountTrigger on Account (before insert, before update) { }"
     raw = trigger_item(body)
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     item = type("Item", (), raw)()
     path = generate_apex(item, tmp_path)
     assert path == tmp_path / "force-app/main/default/triggers/AccountTrigger.trigger"
@@ -123,6 +125,7 @@ def test_metadata_generator_routes_apex(tmp_path: Path):
     (tmp_path / "sfdx-project.json").write_text('{"sourceApiVersion":"67.0"}', encoding="utf-8")
     raw = class_item("public with sharing class AccountService { public static void run() {} }")
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     plan = ImplementationPlan.model_validate({
         "id": "PLAN-APEX-006",
         "requirementId": "REQ-APEX-006",
@@ -138,6 +141,7 @@ def test_metadata_validator_validates_apex_source_and_meta(tmp_path: Path):
     (tmp_path / "sfdx-project.json").write_text('{"sourceApiVersion":"67.0"}', encoding="utf-8")
     raw = class_item("public with sharing class AccountService { public static void run() {} }")
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     plan = ImplementationPlan.model_validate({
         "id": "PLAN-APEX-007",
         "requirementId": "REQ-APEX-007",
@@ -160,6 +164,7 @@ def test_apex_deployment_command_uses_exact_source_file(tmp_path: Path):
     from Backend.AI.app.services.deployment_service import SalesforceDeploymentService
     raw = class_item("public with sharing class AccountService { public static void run() {} }")
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     plan = ImplementationPlan.model_validate({
         "id": "PLAN-APEX-008",
         "requirementId": "REQ-APEX-008",
@@ -212,6 +217,7 @@ def test_metadata_service_accepts_ai_generated_apex_spec():
 
     raw = class_item()
     raw["id"] = raw.pop("itemId")
+    raw["approval"] = "APPROVED"
     plan = ImplementationPlan.model_validate({
         "id": "PLAN-APEX-AI-001",
         "requirementId": "REQ-APEX-AI-001",

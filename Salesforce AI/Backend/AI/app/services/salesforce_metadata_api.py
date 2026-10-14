@@ -79,7 +79,7 @@ class SalesforceMetadataApi:
         finally:logging.getLogger(__name__).warning('Salesforce transport=metadata-api operation=%s seconds=%.3f',method,time.perf_counter()-started)
 
     def list_metadata(self,kind):
-        if kind not in {'PermissionSet','Layout','RecordType','CustomObject','CustomField','ValidationRule','ApexClass','ApexTrigger','Flow','LightningComponentBundle'}:raise ValueError('Unsupported metadata inventory.')
+        if kind not in {'NamedCredential','PermissionSet','Layout','RecordType','CustomObject','CustomField','ValidationRule','ApexClass','ApexTrigger','Flow','LightningComponentBundle'}:raise ValueError('Unsupported metadata inventory.')
         query=element('queries');query.append(element('type',kind))
         rows=[xml_value(row) for row in self.call('listMetadata',[query,element('asOfVersion',self.version)])]
         if any(not isinstance(r,dict) or not isinstance(r.get('fullName'),str) or not r['fullName'] for r in rows):raise RuntimeError('Metadata inventory is incomplete.')

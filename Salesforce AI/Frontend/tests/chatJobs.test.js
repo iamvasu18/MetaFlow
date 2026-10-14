@@ -23,3 +23,22 @@ test('refresh recovery preserves all jobs and migrates the previous single ticke
 test('ticket replacement is idempotent and does not discard another chat', () => {
   assert.deepEqual(addJob([a, b], { ...a, state: 'running' }), [b, { ...a, state: 'running' }]);
 });
+
+import { sameOperation } from '../src/services/chatJobs.js';
+
+test('a delayed status completion cannot overwrite another chat, source revision or deployment job', async () => {
+  const origin = {chat:'A',org:'org',id:'plan',sourceHash:'old',jobId:'validation'};
+  let current = {...origin};
+  let resolve;
+  const pending = new Promise(done => { resolve=done; });
+  let result;
+  const track = pending.then(value => { if (sameOperation(origin,current)) result=value; });
+  current = {...origin,chat:'B'};
+  resolve('old failure');
+  await track;
+  assert.equal(result, undefined);
+  for (const change of [{sourceHash:'new'},{jobId:'deploy'},{id:'other'},{org:'other'}]) {
+    assert.equal(sameOperation(origin,{...origin,...change}), false);
+  }
+  assert.equal(sameOperation(origin,{...origin}), true);
+});

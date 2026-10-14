@@ -201,7 +201,7 @@ def test_slds_comment_is_not_an_override(service):
 def test_unsupported_requirement_is_not_retried(service):
     provider = Mock()
     provider.generate.return_value = '{"unsupported":"Requires Apex"}'
-    with pytest.raises(ValueError, match='Unsupported by this LDS'):
+    with pytest.raises(ValueError, match='Unsupported by this LWC'):
         service.generate(LWCRequest(component_name='accountSearch', requirement='Unsupported'), provider)
     assert provider.generate.call_count == 1
 
@@ -210,3 +210,63 @@ def test_nonstring_provider_response_is_repaired(service):
     provider.generate.side_effect = [None, Provider().generate()]
     assert service.generate(LWCRequest(component_name='accountSearch', requirement='Search Account'), provider)['localChecks']['valid']
     assert provider.generate.call_count == 2
+
+APEX_JS="import { LightningElement, wire } from 'lwc'; import getAccounts from '@salesforce/apex/AccountController.getAccounts'; export default class AccountSearch extends LightningElement { @wire(getAccounts) accounts; }"
+
+def test_verified_cacheable_apex_wire_uses_real_compiler(service):
+    report=service.check_source('accountSearch',LWCSource(html='<template><p>Accounts</p></template>',javascript=APEX_JS),CTX,'67.0',{'AccountController.getAccounts':{'cacheable':True}})
+    assert report['valid']
+
+@pytest.mark.parametrize('methods,source,message',[
+ ({},APEX_JS,'Unverified Apex'),
+ ({'AccountController.getAccounts':{'cacheable':False}},APEX_JS,'must be cacheable'),
+ ({'Other.getAccounts':{'cacheable':True}},APEX_JS,'Unverified Apex'),
+ ({'AccountController.getAccounts':{'cacheable':True}},APEX_JS.replace('import getAccounts from','import { getAccounts } from'),'default import'),
+])
+def test_apex_lwc_import_contract_rejects_invalid_connections(service,methods,source,message):
+    with pytest.raises(ValueError,match=message):
+        service.check_source('accountSearch',LWCSource(html='<template><p>Accounts</p></template>',javascript=source),CTX,'67.0',methods)
+
+def test_verified_noncacheable_apex_can_be_called_imperatively(service):
+    source="import { LightningElement } from 'lwc'; import run from '@salesforce/apex/AccountController.run'; export default class AccountSearch extends LightningElement { error; handleRun() { run().catch(error => { this.error=error; }); } }"
+    report=service.check_source('accountSearch',LWCSource(html='<template><lightning-button label="Run" onclick={handleRun}></lightning-button></template>',javascript=source),CTX,'67.0',{'AccountController.run':{'cacheable':False}})
+    assert report['valid']
+
+def test_wrong_named_apex_parameter_is_rejected(service):
+    source=APEX_JS.replace('@wire(getAccounts)','@wire(getAccounts, {wrongName: "value"})')
+    with pytest.raises(ValueError,match='Unknown Apex parameter'):
+        service.check_source('accountSearch',LWCSource(html='<template><p>Accounts</p></template>',javascript=source),CTX,'67.0',{'AccountController.getAccounts':{'cacheable':True,'parameterNames':['term']}})
+
+def test_ui_list_read_adapter_is_wire_only(service):
+    source="import { LightningElement } from 'lwc'; import { getListRecordsByName } from 'lightning/uiListsApi'; export default class AccountSearch extends LightningElement { load() { return getListRecordsByName({objectApiName:'Account',listViewApiName:'AllAccounts'}); } }"
+    with pytest.raises(ValueError,match='must be used with @wire'):
+        service.check_source('accountSearch',LWCSource(html='<template><p>Accounts</p></template>',javascript=source),CTX,'67.0')
+
+def test_aliased_wire_cannot_bypass_apex_cacheability_policy(service):
+    source=APEX_JS.replace('LightningElement, wire','LightningElement, wire as observe').replace('@wire(', '@observe(')
+    with pytest.raises(ValueError,match='must be cacheable'):
+        service.check_source('accountSearch',LWCSource(html='<template><p>Accounts</p></template>',javascript=source),CTX,'67.0',{'AccountController.getAccounts':{'cacheable':False}})
+
+
+def test_imperative_apex_without_error_handler_is_rejected(service):
+    source="import { LightningElement } from 'lwc'; import run from '@salesforce/apex/AccountController.run'; export default class AccountSearch extends LightningElement { handleRun() { run().then(result => { this.result=result; }); } }"
+    with pytest.raises(ValueError,match='rejection handler'):
+        service.check_source('accountSearch',LWCSource(html='<template><lightning-button label="Run" onclick={handleRun}></lightning-button></template>',javascript=source),CTX,'67.0',{'AccountController.run':{'cacheable':False}})
+
+
+def test_generated_jest_tests_reject_skipped_cases(service):
+    source=LWCSource(html='<template><p>Ready</p></template>',javascript="import {LightningElement} from 'lwc'; export default class AccountSearch extends LightningElement {}",tests="test.skip('not executed',()=>{expect(true).toBe(true);});")
+    with pytest.raises(ValueError,match='skip or focus'):
+        service.check_source('accountSearch',source,CTX,'67.0')
+
+
+def test_archive_exports_behavior_tests_separately_from_deployable_source(service):
+    import io,zipfile,json
+    bundle={'componentName':'accountSearch','apiVersion':'67.0','sourceHash':'saved-hash',
+        'files':{'force-app/main/default/lwc/accountSearch/accountSearch.js':'source'},
+        'verificationFiles':{'force-app/main/default/lwc/accountSearch/__tests__/accountSearch.test.js':'test source'}}
+    with zipfile.ZipFile(io.BytesIO(service.archive(bundle))) as archive:
+        data=json.loads(archive.read('verification/behavior-tests.json'))
+        assert data['sourceHash']=='saved-hash'
+        assert data['verificationFiles']==bundle['verificationFiles']
+        assert not any('/__tests__/' in name for name in archive.namelist())

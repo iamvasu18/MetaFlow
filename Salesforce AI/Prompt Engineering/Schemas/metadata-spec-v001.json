@@ -1,37 +1,7 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "MetadataSpecification",
-  "description": "Complete metadata specification generated from an approved implementation plan.",
-  "type": "object",
-  "properties": {
-    "planId": {
-      "minLength": 1,
-      "title": "Planid",
-      "type": "string"
-    },
-    "metadata": {
-      "items": {
-        "$ref": "#/$defs/MetadataItem"
-      },
-      "title": "Metadata",
-      "type": "array"
-    },
-    "validationIssues": {
-      "items": {
-        "$ref": "#/$defs/MetadataValidationIssue"
-      },
-      "title": "Validationissues",
-      "type": "array"
-    }
-  },
-  "required": [
-    "planId"
-  ],
   "$defs": {
     "MetadataItem": {
-      "description": "One Salesforce metadata component passed to the deterministic metadata generation layer. Supports CREATE for CustomObject, CustomField, ValidationRule, and Flow within the before-save v1 subset. Other component types remain unsupported until their generation pipelines are implemented.",
-      "title": "MetadataItem",
-      "type": "object",
+      "description": "Supported CREATE metadata; config requires the corresponding backend semantic validator.",
       "properties": {
         "itemId": {
           "minLength": 1,
@@ -48,7 +18,10 @@
             "CustomObject",
             "CustomField",
             "ValidationRule",
-            "Flow"
+            "Flow",
+            "PermissionSet",
+            "ApexClass",
+            "ApexTrigger"
           ],
           "title": "Metadatatype",
           "type": "string"
@@ -101,41 +74,11 @@
         "metadataType",
         "fullName"
       ],
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "metadataType": {
-                "const": "Flow"
-              }
-            },
-            "required": [
-              "metadataType"
-            ]
-          },
-          "then": {
-            "required": [
-              "config",
-              "label"
-            ],
-            "properties": {
-              "label": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 255
-              },
-              "config": {
-                "$ref": "flow-config-v001.json"
-              }
-            }
-          }
-        }
-      ]
+      "title": "MetadataItem",
+      "type": "object"
     },
     "MetadataValidationIssue": {
-      "description": "Represents an issue discovered while converting an approved plan into metadata specifications.",
-      "title": "MetadataValidationIssue",
-      "type": "object",
+      "description": "Represents an issue discovered while converting\nan approved plan into metadata specifications.",
       "properties": {
         "itemId": {
           "anyOf": [
@@ -172,7 +115,39 @@
       "required": [
         "code",
         "message"
-      ]
+      ],
+      "title": "MetadataValidationIssue",
+      "type": "object"
     }
-  }
+  },
+  "description": "Declarative and deterministic Apex metadata contract. LWC source uses lwc-source-v001.json and the dedicated compiler/controller contract checks.",
+  "properties": {
+    "planId": {
+      "minLength": 1,
+      "title": "Planid",
+      "type": "string"
+    },
+    "metadata": {
+      "items": {
+        "$ref": "#/$defs/MetadataItem"
+      },
+      "title": "Metadata",
+      "type": "array"
+    },
+    "validationIssues": {
+      "items": {
+        "$ref": "#/$defs/MetadataValidationIssue"
+      },
+      "title": "Validationissues",
+      "type": "array"
+    }
+  },
+  "required": [
+    "planId",
+    "metadata",
+    "validationIssues"
+  ],
+  "title": "MetadataSpecification",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
 }

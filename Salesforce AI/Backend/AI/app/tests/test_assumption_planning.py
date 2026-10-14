@@ -32,9 +32,13 @@ def test_supplemental_inventory_is_not_appended_to_selected_prompt():
     PlanningProvider(p,{'existingComponents':{'ApexClass':['x'*400000]}}).generate('system','selected')
     assert len(p.calls[0]['user_prompt'])<3000
 
-def test_genuinely_large_relevant_context_stops_before_generation():
-    with pytest.raises(ValueError,match='still too large'):
-        compact_planning_context('Account',{'objects':[{'name':'Account','fields':[{'name':'Name','type':'string','extra':'x'*250000}]}]})
+def test_genuinely_large_relevant_context_is_marked_as_partial():
+    projected = compact_planning_context('Account', {'objects': [{'name': 'Account', 'fields': [
+        {'name': 'Name', 'type': 'string', 'calculatedFormula': 'x' * 250000}
+    ]}]})
+    name_field = projected['objects'][0]['fields'][0]
+    assert name_field['oversizeDetailsOmitted'] == ['calculatedFormula']
+    assert 'calculatedFormula' not in name_field
 
 @pytest.mark.parametrize('value',['```json\n{"ok":true}\n```','```json\n{"ok":true}```','{"ok":true}'])
 def test_complete_json_formats(value): assert _parse_ai_json(value)=={'ok':True}

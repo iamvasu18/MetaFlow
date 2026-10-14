@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "ApexClassSource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "apex_kind": {
+          "title": "Apex Kind",
+          "type": "string"
+        },
+        "body": {
+          "maxLength": 200000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "apex_kind",
+        "body"
+      ],
+      "title": "ApexClassSource",
+      "type": "object"
+    },
+    "ApexTriggerSource": {
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]{0,79}$",
+          "title": "Name",
+          "type": "string"
+        },
+        "sobject": {
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "title": "Sobject",
+          "type": "string"
+        },
+        "events": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 7,
+          "minItems": 1,
+          "title": "Events",
+          "type": "array"
+        },
+        "body": {
+          "maxLength": 200000,
+          "minLength": 1,
+          "title": "Body",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "sobject",
+        "events",
+        "body"
+      ],
+      "title": "ApexTriggerSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "classes": {
+      "items": {
+        "$ref": "#/$defs/ApexClassSource"
+      },
+      "maxItems": 12,
+      "minItems": 2,
+      "title": "Classes",
+      "type": "array"
+    },
+    "triggers": {
+      "items": {
+        "$ref": "#/$defs/ApexTriggerSource"
+      },
+      "maxItems": 4,
+      "title": "Triggers",
+      "type": "array"
+    }
+  },
+  "required": [
+    "classes"
+  ],
+  "title": "ApexSources",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "properties": {
+    "html": {
+      "maxLength": 200000,
+      "minLength": 1,
+      "title": "Html",
+      "type": "string"
+    },
+    "javascript": {
+      "maxLength": 200000,
+      "minLength": 1,
+      "title": "Javascript",
+      "type": "string"
+    },
+    "css": {
+      "default": "",
+      "maxLength": 200000,
+      "title": "Css",
+      "type": "string"
+    },
+    "tests": {
+      "default": "",
+      "maxLength": 200000,
+      "title": "Tests",
+      "type": "string"
+    }
+  },
+  "required": [
+    "html",
+    "javascript"
+  ],
+  "title": "LWCSource",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema"
+}

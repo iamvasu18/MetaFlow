@@ -85,3 +85,26 @@ def test_generation_starts_validation_without_recording_approval(client):
     assert result['state']=='pending' and result['operation']=='validate'
     assert not result.get('approvedHash')
     assert main.plan_store.get(plan.id).status=='DRAFT'
+
+def test_report_identity_mismatch_cannot_replace_the_saved_plan(client):
+    plan,bundle=draft()
+    bundle.update(state='pending',operation='validate',jobId='current-job')
+    scoped(main.metadata_spec_store.save_package,bundle)
+    wrong={'result':{'id':'another-plan-job','done':True,'success':False,'details':{'componentFailures':[{'problem':'Unrelated error'}]}}}
+    with pytest.raises(ValueError,match='job identity'):
+        scoped(main.save_default_result,plan.id,bundle,wrong,'validate')
+    saved=main.metadata_spec_store.get_package(plan.id)
+    assert saved['state']=='pending' and saved['jobId']=='current-job'
+    assert not saved.get('lastResult')
+
+def test_new_submission_does_not_carry_the_previous_validation_report(client):
+    plan,bundle=draft()
+    bundle['lastResult']={'result':{'details':{'componentFailures':[{'problem':'Old error'}]}}}
+    scoped(main.metadata_spec_store.save_package,bundle)
+    def submit(package,**kwargs):
+        assert package['lastResult'] is None and package['jobId'] is None
+        return {'result':{'id':'fresh-job','done':False,'status':'Pending','checkOnly':True}}
+    with patch.object(main.layout_workflow,'require',return_value={}),patch.object(main.default_pipeline,'deploy',side_effect=submit):
+        result=scoped(main.run_default_package,plan.id,True)
+    assert result['jobId']=='fresh-job' and result['state']=='pending'
+    assert 'Old error' not in str(result['lastResult'])

@@ -1,0 +1,76 @@
+<?xml version='1.0' encoding='utf-8'?>
+<Flow xmlns="http://soap.sforce.com/2006/04/metadata">
+    <apiVersion>67.0</apiVersion>
+    <decisions>
+        <name>Check_Days_of_Field</name>
+        <label>Check Days of Field</label>
+        <locationX>176</locationX>
+        <locationY>176</locationY>
+        <defaultConnectorLabel>Days &lt; 30</defaultConnectorLabel>
+        <rules>
+            <name>Days_GTE_30</name>
+            <conditionLogic>and</conditionLogic>
+            <conditions>
+                <leftValueReference>$Record.Days_of_Field__c</leftValueReference>
+                <operator>GreaterThanOrEqualTo</operator>
+                <rightValue>
+                    <numberValue>30</numberValue>
+                </rightValue>
+            </conditions>
+            <connector>
+                <targetReference>Set_Status_Active</targetReference>
+            </connector>
+            <label>Days &gt;= 30</label>
+        </rules>
+    </decisions>
+    <description>Record-triggered after-save flow that sets Status to Active when Days_of_Field__c &gt;= 30 on Field_List__c.</description>
+    <interviewLabel>Set Status Active When Days Greater Than 30 {!$Flow.CurrentDateTime}</interviewLabel>
+    <label>Set Status Active When Days Greater Than 30</label>
+    <processType>AutoLaunchedFlow</processType>
+    <recordUpdates>
+        <name>Set_Status_Active</name>
+        <label>Set Status Active</label>
+        <locationX>176</locationX>
+        <locationY>336</locationY>
+        <filterLogic>1 AND (2 OR 3)</filterLogic>
+        <filters>
+            <field>Id</field>
+            <operator>EqualTo</operator>
+            <value>
+                <elementReference>$Record.Id</elementReference>
+            </value>
+        </filters>
+        <filters>
+            <field>Status__c</field>
+            <operator>NotEqualTo</operator>
+            <value>
+                <stringValue>Active</stringValue>
+            </value>
+        </filters>
+        <filters>
+            <field>Status__c</field>
+            <operator>IsNull</operator>
+            <value>
+                <booleanValue>true</booleanValue>
+            </value>
+        </filters>
+        <inputAssignments>
+            <field>Status__c</field>
+            <value>
+                <stringValue>Active</stringValue>
+            </value>
+        </inputAssignments>
+        <object>Field_List__c</object>
+    </recordUpdates>
+    <start>
+        <locationX>50</locationX>
+        <locationY>0</locationY>
+        <connector>
+            <targetReference>Check_Days_of_Field</targetReference>
+        </connector>
+        <object>Field_List__c</object>
+        <recordTriggerType>CreateAndUpdate</recordTriggerType>
+        <triggerType>RecordAfterSave</triggerType>
+    </start>
+    <status>Draft</status>
+</Flow>

@@ -37,13 +37,8 @@
       "minimum": 0
     },
     "status": {
-      "type": "string",
-      "enum": [
-        "DRAFT",
-        "READY_FOR_REVIEW",
-        "APPROVED",
-        "REJECTED"
-      ]
+      "const": "DRAFT",
+      "type": "string"
     }
   },
   "$defs": {
@@ -54,7 +49,10 @@
         "action",
         "metadataType",
         "fullName",
-        "dependencies"
+        "dependencies",
+        "approval",
+        "validation",
+        "deployment"
       ],
       "properties": {
         "id": {
@@ -91,19 +89,37 @@
         "target": {},
         "config": {},
         "validation": {
-          "type": "object"
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "valid",
+            "errors",
+            "warnings"
+          ],
+          "properties": {
+            "valid": {
+              "type": "boolean"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
         },
         "approval": {
-          "type": "string",
-          "enum": [
-            "PENDING",
-            "APPROVED",
-            "SKIPPED",
-            "REJECTED"
-          ]
+          "const": "PENDING",
+          "type": "string"
         },
         "deployment": {
-          "type": "object"
+          "type": "null"
         }
       },
       "allOf": [
@@ -136,5 +152,6 @@
         }
       ]
     }
-  }
+  },
+  "description": "Initial AI-generated draft contract. Persisted lifecycle states are managed by the backend, never by this model output."
 }

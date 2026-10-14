@@ -118,7 +118,8 @@ class PageLayoutService:
         if not executable:
             raise RuntimeError("Salesforce CLI 'sf' is not installed or is not on PATH.")
         try:
-            result = subprocess.run([executable, *arguments, "--target-org", self.target_org, "--json"], cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1920, check=False)
+            from Backend.AI.app.services.sf_process import sf_arguments
+            result = subprocess.run(sf_arguments([executable, *arguments, "--target-org", self.target_org, "--json"]), cwd=str(root), capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=1920, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"Salesforce layout retrieval could not finish: {exc}") from exc
         try:

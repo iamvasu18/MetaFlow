@@ -51,7 +51,7 @@ def test_validation_failure_never_enables_deploy(client):
 def test_deploy_requires_validation_then_submits_actual_deploy(client):
     bundle=approve_fixture();bundle['state']='validated';bundle['validatedHash']=bundle['sourceHash']
     main.metadata_spec_store.save_package(bundle)
-    result={'result':{'done':True,'success':True,'id':'job'}}
+    result={'result':{'done':True,'success':True,'checkOnly':False,'id':'job'}}
     with patch.object(main.default_pipeline,'verify_package'),patch.object(main.default_pipeline,'assert_plan'),patch.object(main.layout_workflow,'require',return_value={}),patch.object(main.default_pipeline,'check_tests'),patch.object(main.default_pipeline,'deploy',return_value=result) as deploy:
         response=client.post('/api/plans/PLAN-old/deploy',json={'approved':True,'source_hash':bundle['sourceHash']})
     assert response.status_code==200,response.text
